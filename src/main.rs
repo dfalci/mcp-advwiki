@@ -45,14 +45,12 @@ Configuração para Claude Desktop (claude_desktop_config.json):
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    // Verifica flag de ajuda antes de qualquer inicialização
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("{HELP_BANNER}");
         return Ok(());
     }
 
-    // ── Configura tracing para stderr ────────────────────────────────────
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter("info")
@@ -60,7 +58,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     tracing::info!("Iniciando o Servidor MCP AdvWiki...");
 
-    // 0. Inicializa o gerenciador de arquivos da Wiki
+    //inicializa o gerenciador de arquivos
     let wiki = Arc::new(storage::WikiFileManager::new(None));
     wiki.init().await?;
     tracing::info!(
@@ -68,7 +66,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "Wiki inicializada"
     );
 
-    // 1. Inicializa o motor de busca (Tantivy BM25)
     let index_path = wiki.wiki_dir().join("index");
     let search_engine = Arc::new(
         search::WikiSearchEngine::new(index_path)?,
@@ -78,17 +75,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "Índice de busca inicializado"
     );
 
-    // 1.5 Reindexa conteúdo já existente no disco
+    //reindexa conteúdo já existente no disco
     rebuild_index(&wiki, &search_engine).await?;
 
-    // 2. Inicializa o File Watcher (reatividade)
+    //inicializa o file watcher
     let (mut event_rx, _watcher) = watcher::WikiWatcher::start(
         wiki.root().to_path_buf(),
         wiki.wiki_dir().to_path_buf(),
     )?;
     tracing::info!("File watcher iniciado");
 
-    // 3. Task de consumo de eventos do watcher → atualização do índice
+    //task de consumo de eventos do watcher... atualização do índice
     let search_clone = search_engine.clone();
     let wiki_clone = wiki.clone();
     tokio::spawn(async move {
@@ -97,14 +94,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    // 4. Inicia o servidor MCP (bloqueante — escuta stdin/stdout)
+    //inicia o servidor MCP (blockado.. escuta stdin/stdout)
     let server = mcp_server::AdvWikiMcpServer::new(wiki, search_engine);
     server.run().await?;
 
     Ok(())
 }
 
-/// Reage a um evento do sistema de arquivos atualizando o índice Tantivy.
+/// reage a um evento do sistema de arquivos atualizando o índice Tantivy.
 async fn handle_wiki_event(
     engine: &search::WikiSearchEngine,
     wiki: &storage::WikiFileManager,
@@ -117,7 +114,7 @@ async fn handle_wiki_event(
             let uri = format!("wiki://page/{slug}");
             match wiki.read_page(&slug).await {
                 Ok(content) => {
-                    // O título é o slug com hífens substituídos por espaços
+                    // o título é o slug com hífens substituídos por espaços
                     let title = slug.replace('-', " ");
                     let now = chrono::Utc::now().timestamp();
                     if let Err(e) = engine.index_document(&uri, &title, &content, now) {
@@ -190,7 +187,7 @@ async fn rebuild_index(
     let now = chrono::Utc::now().timestamp();
     let mut docs: Vec<(String, String, String, i64)> = Vec::new();
 
-    // Páginas da Wiki
+    // páginas da Wiki
     match wiki.list_pages().await {
         Ok(slugs) => {
             for slug in &slugs {
@@ -212,7 +209,7 @@ async fn rebuild_index(
         }
     }
 
-    // Raw sources
+    // raw sources
     match wiki.list_raw_sources().await {
         Ok(source_ids) => {
             for source_id in &source_ids {

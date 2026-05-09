@@ -21,9 +21,9 @@ use tantivy::query::QueryParser;
 use tantivy::schema::*;
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
 
-// ── Estruturas de Dados ─────────────────────────────────────────────────────
+// rstruturas de dados
 
-/// Resultado de uma busca.
+/// resultado de uma busca.
 #[derive(Debug, Clone)]
 pub struct SearchResult {
     /// URI lógica do documento (ex: `wiki://page/home`).
@@ -36,7 +36,7 @@ pub struct SearchResult {
     pub snippet: String,
 }
 
-/// Motor de busca da Wiki baseado em Tantivy.
+/// motor de busca da Wiki baseado em Tantivy.
 ///
 /// # Thread safety
 ///
@@ -55,7 +55,7 @@ pub struct WikiSearchEngine {
     reader: IndexReader,
 }
 
-// ── Acesso aos Campos ───────────────────────────────────────────────────────
+// acesso aos campos
 
 /// Wrapper para acesso tipado aos campos do schema.
 ///
@@ -70,7 +70,7 @@ struct Fields {
 }
 
 impl Fields {
-    /// Constrói o schema Tantivy e retorna os campos + o Schema.
+    /// constrói o schema Tantivy e retorna os campos + o schema.
     fn build() -> (Self, Schema) {
         let mut schema_builder = Schema::builder();
 
@@ -96,16 +96,14 @@ impl Fields {
     }
 }
 
-// ── Construtor ──────────────────────────────────────────────────────────────
 
 impl WikiSearchEngine {
-    /// Abre um índice existente ou cria um novo no caminho especificado.
-    ///
+    /// abre um indice existente ou cria um novo no caminho especificado.
     /// O diretório de índice é criado automaticamente se não existir.
     pub fn new(index_path: PathBuf) -> anyhow::Result<Self> {
         let (fields, schema) = Fields::build();
 
-        // Abre ou cria o diretório do índice
+        // abre ou cria o diretório do índice
         let index = if index_path.exists() {
             Index::open_in_dir(&index_path)
                 .with_context(|| format!("Falha ao abrir índice em: {}", index_path.display()))?
@@ -116,13 +114,13 @@ impl WikiSearchEngine {
                 .with_context(|| format!("Falha ao criar índice em: {}", index_path.display()))?
         };
 
-        // Writer com 50 MB de buffer de RAM
+        // writer com 50 MB de buffer de RAM
         let writer = index
             .writer(50_000_000)
             .context("Falha ao criar IndexWriter")?;
         let writer = Arc::new(Mutex::new(writer));
 
-        // Reader para buscas concorrentes
+        // reader para buscas concorrentes
         let reader = index
             .reader_builder()
             .reload_policy(ReloadPolicy::Manual)
@@ -143,16 +141,16 @@ impl WikiSearchEngine {
         })
     }
 
-    /// Retorna o caminho do diretório do índice.
+    /// retorna o caminho do diretório do índice.
     pub fn index_path(&self) -> &PathBuf {
         &self.index_path
     }
 
     // ── Operações de Escrita ─────────────────────────────────────────────────
 
-    /// Indexa ou atualiza um documento no índice.
+    /// indexa ou atualiza um documento no índice.
     ///
-    /// Se já existir um documento com a mesma `uri`, ele é removido antes
+    /// se já existir um documento com a mesma `uri`, ele é removido antes
     /// da inserção (upsert semântico).
     ///
     /// - `uri`: Chave primária (ex: `wiki://page/home`).
@@ -169,11 +167,11 @@ impl WikiSearchEngine {
         let fields = &self.fields;
         let mut writer = self.writer.lock().unwrap();
 
-        // Remove documento existente com a mesma URI (upsert)
+        // remove documento existente com a mesma URI (upsert)
         let uri_term = tantivy::Term::from_field_text(fields.uri, uri);
         writer.delete_term(uri_term);
 
-        // Adiciona o novo documento
+        // adiciona o novo documento
         writer
             .add_document(doc!(
                 fields.uri => uri,
@@ -183,7 +181,7 @@ impl WikiSearchEngine {
             ))
             .with_context(|| format!("Falha ao indexar documento: {}", uri))?;
 
-        // Commit para persistir e tornar visível para buscas
+        // commit para persistir e tornar visível para buscas
         writer
             .commit()
             .context("Falha ao commitar alterações no índice")?;
@@ -192,7 +190,7 @@ impl WikiSearchEngine {
         Ok(())
     }
 
-    /// Remove um documento do índice pela URI.
+    /// remove um documento do índice pela URI.
     pub fn delete_document(&self, uri: &str) -> anyhow::Result<()> {
         let fields = &self.fields;
         let mut writer = self.writer.lock().unwrap();
@@ -208,10 +206,10 @@ impl WikiSearchEngine {
         Ok(())
     }
 
-    /// Indexa todos os documentos de uma vez (bulk index).
+    /// indexa todos os documentos de uma vez (bulk index).
     ///
-    /// Útil para rebuild completo do índice a partir do disco.
-    /// Cada tupla contém `(uri, title, content, last_modified)`.
+    /// útil para rebuild completo do índice a partir do disco.
+    /// cada tupla contém `(uri, title, content, last_modified)`.
     pub fn index_bulk(&self, documents: &[(String, String, String, i64)]) -> anyhow::Result<u64> {
         let fields = &self.fields;
         let mut writer = self.writer.lock().unwrap();
@@ -238,8 +236,6 @@ impl WikiSearchEngine {
         tracing::info!(count = %count, "Bulk index concluído");
         Ok(count)
     }
-
-    // ── Operações de Busca ───────────────────────────────────────────────────
 
     /// Realiza uma busca textual no índice.
     ///

@@ -22,8 +22,6 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
-// ── Estruturas de Dados ─────────────────────────────────────────────────────
-
 /// Metadados de uma raw source (arquivo externo indexado).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawSourceMetadata {
@@ -77,7 +75,6 @@ pub struct WikiFileManager {
     wiki_dir: PathBuf,
 }
 
-// ── Resolução de URIs ───────────────────────────────────────────────────────
 
 /// URI lógicas suportadas pelo sistema (formato RFC: `esquema://path`).
 ///
@@ -136,8 +133,6 @@ impl WikiUri {
     }
 }
 
-// ── Construtor e Inicialização ──────────────────────────────────────────────
-
 impl WikiFileManager {
     /// Cria um novo `WikiFileManager`.
     ///
@@ -161,7 +156,6 @@ impl WikiFileManager {
         &self.wiki_dir
     }
 
-    // ── Resolução de URIs para caminhos físicos ─────────────────────────────
 
     /// Resolve uma URI lógica para um `PathBuf` físico **validado**.
     ///
@@ -248,8 +242,6 @@ impl WikiFileManager {
         // a estrutura de diretórios lógica.
         Ok(path)
     }
-
-    // ── Inicialização ───────────────────────────────────────────────────────
 
     /// Inicializa a estrutura de diretórios da Wiki.
     ///
@@ -351,8 +343,8 @@ impl WikiFileManager {
             .await
             .with_context(|| format!("Falha ao ler rawindex: {}", path.display()))?;
 
-        // Parse: ignora linhas de cabeçalho (começam com #) e linhas vazias.
-        // Cada entrada tem o formato: `source_id | original_path | extracted_at`
+        // parse ignora linhas de cabeçalho (começam com #) e linhas vazias.
+        // cada entrada tem o formato: `source_id | original_path | extracted_at`
         let entries: Vec<RawIndexEntry> = content
             .lines()
             .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
@@ -449,7 +441,6 @@ impl WikiFileManager {
             .with_context(|| format!("Falha ao parsear JSON de metadados para '{}'", source_id))
     }
 
-    // ── Operações de Escrita ─────────────────────────────────────────────────
 
     /// Cria ou sobrescreve uma página da wiki.
     ///

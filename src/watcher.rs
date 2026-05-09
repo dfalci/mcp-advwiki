@@ -19,7 +19,6 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc as std_mpsc;
 use tokio::sync::mpsc as tokio_mpsc;
 
-// ── Eventos de Domínio ─────────────────────────────────────────────────────
 
 /// Eventos lógicos gerados a partir de alterações no sistema de arquivos da Wiki.
 ///
@@ -57,7 +56,6 @@ pub enum WikiEvent {
     Unknown(String),
 }
 
-// ── WikiWatcher ─────────────────────────────────────────────────────────────
 
 /// Serviço de monitoramento reativo do sistema de arquivos da Wiki.
 ///
@@ -89,9 +87,7 @@ impl WikiWatcher {
         root: PathBuf,
         wiki_dir: PathBuf,
     ) -> anyhow::Result<(tokio_mpsc::UnboundedReceiver<WikiEvent>, Self)> {
-        // ── Canonicalização inicial ───────────────────────────────────────
-        //
-        // Canonicalizamos root e derivamos wiki_dir antes de qualquer
+        // Canonicaliza o root e derivamos wiki_dir antes de qualquer
         // operação, garantindo que `watcher.watch()` e a `bg_task` usem
         // os mesmos prefixos. Se `notify` emitir paths com prefixo
         // diferente, as comparações `starts_with` falhariam silenciosamente.
@@ -102,13 +98,13 @@ impl WikiWatcher {
         let log_path = root.join(".advwikilog.md");
         let index_path = root.join("rawindex.md");
 
-        // ── Canal de domínio (assíncrono) ──────────────────────────────────
+        // canal de domínio (assíncrono)
         let (domain_tx, domain_rx) = tokio_mpsc::unbounded_channel();
 
-        // ── Canal bruto (síncrono) para bridge com notify ─────────────────
+        // canal bruto (síncrono) para bridge com notify
         let (raw_tx, raw_rx) = std_mpsc::channel::<notify::Result<Event>>();
 
-        // ── Watcher nativo do notify ──────────────────────────────────────
+        // watcher nativo do notify
         let mut watcher = RecommendedWatcher::new(
             move |res: notify::Result<Event>| {
                 // O callback roda na thread interna do notify.
@@ -120,13 +116,12 @@ impl WikiWatcher {
         )
         .context("Falha ao criar o RecommendedWatcher do notify")?;
 
-        // ── Registra os caminhos a monitorar (canônicos) ──────────────────
+        // registra os caminhos a monitorar (canônicos)
         watcher
             .watch(&wiki_dir, RecursiveMode::Recursive)
             .with_context(|| format!("Falha ao monitorar: {}", wiki_dir.display()))?;
 
-        // Monitora arquivos individuais na raiz (não-recursivo para não
-        // capturar `target/`, `src/`, etc.)
+        // monitora arquivos individuais na raiz (não-recursivo para não capturar `target/`, `src/`, etc.)
         if log_path.exists() {
             watcher
                 .watch(&log_path, RecursiveMode::NonRecursive)
@@ -144,7 +139,7 @@ impl WikiWatcher {
             "File watcher iniciado"
         );
 
-        // ── Tarefa de bridge em background ────────────────────────────────
+        // tarefa de bridge em background
         //
         // `spawn_blocking` é usado porque `raw_rx.recv()` é bloqueante.
         // A tarefa lê eventos brutos, traduz para `WikiEvent` e envia pelo
@@ -164,7 +159,7 @@ impl WikiWatcher {
                             translate_event(&event, &bg_root, &bg_wiki_dir);
 
                         for domain_event in domain_events {
-                            // Ignora erro de envio — significa que o receiver
+                            // ignora erro de envio — significa que o receiver
                             // foi dropado (shutdown).
                             if domain_tx.send(domain_event).is_err() {
                                 tracing::debug!("Canal de domínio fechado, watcher encerrando");
@@ -191,7 +186,7 @@ impl WikiWatcher {
     }
 }
 
-// ── Tradução de Eventos ─────────────────────────────────────────────────────
+// tradução de eventos
 
 /// Traduz um `notify::Event` bruto em zero ou mais `WikiEvent`s de domínio.
 ///
@@ -206,12 +201,12 @@ fn translate_event(
     root: &Path,
     wiki_dir: &Path,
 ) -> Vec<WikiEvent> {
-    // Ignora eventos de Access (alta frequência, sem efeito no índice)
+    // ignora eventos de Access (alta frequência, sem efeito no índice)
     if matches!(event.kind, EventKind::Access(_)) {
         return Vec::new();
     }
 
-    // Diretórios esperados (caminhos brutos)
+    // diretórios esperados (caminhos brutos)
     let pages_dir = wiki_dir.join("pages");
     let sources_dir = wiki_dir.join("sources");
     let metadata_dir = wiki_dir.join("metadata");
@@ -221,7 +216,7 @@ fn translate_event(
     let mut domain_events = Vec::new();
 
     for path in &event.paths {
-        // ── Páginas (.advwiki/pages/*.md) ─────────────────────────────────
+        // páginas (.advwiki/pages/*.md)
         if path_is_in(path, &pages_dir) {
             if let Some(slug) = extract_slug(path, &pages_dir) {
                 let domain_event = match event.kind {
@@ -249,7 +244,7 @@ fn translate_event(
             continue;
         }
 
-        // ── Raw Sources (sources/ e metadata/) ───────────────────────────
+        // raw sources (sources/ e metadata/)
         if path_is_in(path, &sources_dir) || path_is_in(path, &metadata_dir) {
             if let Some(source_id) = extract_source_id(path, &sources_dir, &metadata_dir) {
                 let domain_event = match event.kind {
@@ -273,7 +268,7 @@ fn translate_event(
             continue;
         }
 
-        // ── Outros dentro da wiki ────────────────────────────────────────
+        // outros dentro da wiki
         if path_is_in(path, wiki_dir) {
             domain_events.push(WikiEvent::Unknown(format!(
                 "Alteração não classificada dentro da wiki: {} ({:?})",
@@ -359,13 +354,12 @@ fn extract_slug(canonical_path: &Path, pages_dir: &Path) -> Option<String> {
     Some(slug.to_string())
 }
 
-// ── Testes ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ── Testes de extract_slug ────────────────────────────────────────────
+
 
     #[test]
     fn test_extract_slug_simple() {
@@ -462,8 +456,6 @@ mod tests {
         assert_ne!(a, c);
     }
 
-    // ── Testes de path_is_in e path_equals ────────────────────────────────
-
     #[test]
     fn test_path_is_in_true() {
         let parent = PathBuf::from("/root/.advwiki/pages");
@@ -491,8 +483,6 @@ mod tests {
         let b = PathBuf::from("/root/rawindex.md");
         assert!(!path_equals(&a, &b));
     }
-
-    // ── Testes de extract_source_id ───────────────────────────────────────
 
     #[test]
     fn test_extract_source_id_from_sources() {

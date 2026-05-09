@@ -13,7 +13,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use crate::search::WikiSearchEngine;
 use crate::storage::WikiFileManager;
 
-// ── Tipos JSON-RPC ──────────────────────────────────────────────────────────
+// tipos JSON-RPC
 
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
@@ -74,9 +74,8 @@ impl JsonRpcResponse {
     }
 }
 
-// ── Tipos MCP ───────────────────────────────────────────────────────────────
-//
-// Nomes em camelCase são intencionais — seguem a especificação JSON do MCP.
+// tipos mcp
+// nomes em camelCase seguem a especificação json do mcp.
 
 #[derive(Debug, Serialize)]
 #[allow(non_snake_case)]
@@ -122,15 +121,15 @@ struct McpToolContent {
     text: String,
 }
 
-// ── Negociação de Protocolo ─────────────────────────────────────────────────
+// negociação de Protocolo
 
-/// Versões de protocolo MCP suportadas, em ordem de preferência (mais recente primeiro).
+/// versões de protocolo mcp suportadas, em ordem de preferência (mais recente primeiro).
 const SUPPORTED_PROTOCOLS: &[&str] = &["2025-11-25", "2025-06-18", "2024-11-05"];
 
-/// Negocia a versão do protocolo MCP com o cliente.
+/// negocia a versão do protocolo mcp com o cliente.
 ///
-/// Se o cliente solicitar uma versão suportada, ela é aceita.
-/// Caso contrário, retorna a versão mais recente suportada.
+/// se o cliente solicitar uma versão suportada, ela é aceita.
+/// caso contrário, retorna a versão mais recente suportada.
 fn negotiate_protocol(requested: Option<&str>) -> &str {
     match requested {
         Some(v) if SUPPORTED_PROTOCOLS.contains(&v) => v,
@@ -152,7 +151,7 @@ fn guess_mime_from_path(path: &Path) -> Option<String> {
     Some(mime.to_string())
 }
 
-// ── Servidor MCP ────────────────────────────────────────────────────────────
+// servidor MCP
 
 pub struct AdvWikiMcpServer {
     file_manager: Arc<WikiFileManager>,
@@ -205,7 +204,7 @@ impl AdvWikiMcpServer {
         Ok((bytes, mime_type))
     }
 
-    /// Inicia o loop principal do servidor MCP sobre stdin/stdout.
+    /// inicia o loop principal do servidor mcp sobre stdin/stdout.
     pub async fn run(self) -> anyhow::Result<()> {
         tracing::info!("Servidor MCP iniciado — aguardando requisições em stdin");
 
@@ -248,7 +247,7 @@ impl AdvWikiMcpServer {
         Ok(())
     }
 
-    /// Roteia uma requisição JSON-RPC para o handler apropriado.
+    /// roteia uma requisição JSON-RPC para o handler apropriado.
     async fn handle_request(&self, req: JsonRpcRequest) -> JsonRpcResponse {
         match req.method.as_str() {
             "initialize" => self.handle_initialize(req.id, req.params).await,
@@ -264,7 +263,7 @@ impl AdvWikiMcpServer {
         }
     }
 
-    // ── Initialize ──────────────────────────────────────────────────────────
+    // initialize
 
     async fn handle_initialize(
         &self,
@@ -295,7 +294,7 @@ impl AdvWikiMcpServer {
         JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
     }
 
-    // ── Resources ───────────────────────────────────────────────────────────
+    // resources
 
     async fn handle_list_resources(&self, id: Option<Value>) -> JsonRpcResponse {
         let mut resources = Vec::new();
@@ -315,7 +314,7 @@ impl AdvWikiMcpServer {
             mimeType: Some("text/markdown".into()),
         });
 
-        // Páginas dinâmicas
+        // paginas dinamicas
         match self.file_manager.list_pages().await {
             Ok(slugs) => {
                 for slug in slugs {
@@ -332,7 +331,7 @@ impl AdvWikiMcpServer {
             }
         }
 
-        // Raw sources
+        // raw resources
         match self.file_manager.list_raw_sources().await {
             Ok(ids) => {
                 for source_id in ids {
@@ -431,13 +430,13 @@ impl AdvWikiMcpServer {
         anyhow::bail!("Recurso não encontrado: {uri}");
     }
 
-    // ── Tools ───────────────────────────────────────────────────────────────
+    // tools
 
     async fn handle_list_tools(&self, id: Option<Value>) -> JsonRpcResponse {
         let tools = vec![
             McpTool {
                 name: "query_wiki".into(),
-                description: Some("Busca textual na Wiki usando BM25. Retorna páginas e raw sources relevantes.".into()),
+                description: Some("Busca textual na Wiki usando BM25. Retorna as páginas e raw sources relevantes.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
@@ -626,8 +625,7 @@ impl AdvWikiMcpServer {
         }
     }
 
-    // ── Tool: query_wiki ────────────────────────────────────────────────────
-
+    // tool - query_wiki
     async fn tool_query_wiki(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
         let question = args
             .get("question")
@@ -649,7 +647,7 @@ impl AdvWikiMcpServer {
             .search(question, max_pages)
             .map_err(|e| format!("Search error: {e}"))?;
 
-        // Filtra raw sources se includeRawReferences for false
+        // filtra raw sources se includeRawReferences for false
         if !include_raw {
             results.retain(|r| !r.uri.starts_with("raw://"));
         }
@@ -678,8 +676,7 @@ impl AdvWikiMcpServer {
         }])
     }
 
-    // ── Tool: update_page ───────────────────────────────────────────────────
-
+    // tool - update_page
     async fn tool_update_page(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
         let slug = args
             .get("slug")
@@ -729,8 +726,7 @@ impl AdvWikiMcpServer {
         }])
     }
 
-    // ── Tool: ingest_source ─────────────────────────────────────────────────
-
+    // tool - ingest_source
     async fn tool_ingest_source(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
         let source_uri = args
             .get("sourceUri")
@@ -792,8 +788,7 @@ impl AdvWikiMcpServer {
         }])
     }
 
-    // ── Tool: ingest_extracted_content ──────────────────────────────────────
-
+    // tool - ingest_extracted_content
     async fn tool_ingest_extracted(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
         let logical_uri = args
             .get("logicalUri")
@@ -866,8 +861,7 @@ impl AdvWikiMcpServer {
         }])
     }
 
-    // ── Tool: lint_wiki ─────────────────────────────────────────────────────
-
+    // tool - lint_wiki
     async fn tool_lint_wiki(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
         let scope = args
             .get("scope")
@@ -877,7 +871,7 @@ impl AdvWikiMcpServer {
         let mut report = Vec::new();
         report.push(format!("# Relatório de Validação (scope: {scope})\n"));
 
-        // Conta páginas
+        // conta as paginas
         let pages = self
             .file_manager
             .list_pages()
@@ -886,7 +880,7 @@ impl AdvWikiMcpServer {
 
         report.push(format!("- Páginas encontradas: {}", pages.len()));
 
-        // Conta raw sources
+        // conta raw resources
         let sources = self
             .file_manager
             .list_raw_sources()
@@ -895,7 +889,7 @@ impl AdvWikiMcpServer {
 
         report.push(format!("- Raw sources: {}", sources.len()));
 
-        // Conta documentos no índice
+        // conta documentos no índice
         let doc_count = self
             .search_engine
             .doc_count()
@@ -903,21 +897,21 @@ impl AdvWikiMcpServer {
 
         report.push(format!("- Documentos no índice: {doc_count}"));
 
-        // Verifica consistência (páginas + raw sources vs índice)
+        // verifica a consistência (paginas + raw sources vs indice)
         let expected_count = (pages.len() + sources.len()) as u64;
         if expected_count != doc_count {
             report.push(format!(
-                "- ⚠️ Inconsistência: {} documentos no disco ({} páginas + {} sources) vs {} no índice",
+                "- warn - Inconsistência: {} documentos no disco ({} páginas + {} sources) vs {} no índice",
                 expected_count,
                 pages.len(),
                 sources.len(),
                 doc_count
             ));
         } else {
-            report.push("- ✅ Índice consistente com o disco".to_string());
+            report.push("- ok - Índice consistente com o disco".to_string());
         }
 
-        report.push("\n## Páginas\n".into());
+        report.push("\n## Paginas\n".into());
         if pages.is_empty() {
             report.push("(nenhuma)".into());
         } else {
@@ -932,8 +926,7 @@ impl AdvWikiMcpServer {
         }])
     }
 
-    // ── Tool: read_knowledge_uri ──────────────────────────────────────────────
-
+    // tool - read_knowledge_uri
     async fn tool_read_knowledge_uri(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
         let uri = args
             .get("uri")
