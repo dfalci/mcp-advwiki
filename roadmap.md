@@ -1,32 +1,32 @@
 # MCP AdvWiki — Roadmap
 
-Este roadmap organiza as próximas evoluções sugeridas para o `mcp-advwiki`, com foco em transformar o projeto de um servidor MCP de busca/wiki local em uma camada de memória arquitetural persistente, navegável, auditável e útil no dia a dia de desenvolvimento.
+This roadmap organizes the next suggested evolutions for `mcp-advwiki`, with a focus on transforming the project from a local MCP search/wiki server into a layer of persistent, navigable, auditable architectural memory that is actually useful in day-to-day development.
 
-A ideia central é evoluir de uma wiki pesquisável para uma **base de conhecimento viva**, mantida com ajuda de agentes, mas estruturada o suficiente para não virar apenas um amontoado de Markdown.
+The core idea is to evolve from a searchable wiki into a **living knowledge base**, maintained with the help of agents, but structured enough that it does not turn into just a pile of Markdown.
 
 ---
 
-## 1. Criar um `index.md` navegável da wiki
+## 1. Create a navigable wiki `index.md`
 
-### Objetivo
+### Goal
 
-Criar uma página central de navegação da wiki, diferente do `rawindex.md`.
+Create a central wiki navigation page, different from `rawindex.md`.
 
-O `rawindex.md` deve continuar sendo o índice das fontes brutas ingeridas. Já o `index.md` deve funcionar como o mapa conceitual da wiki: quais projetos existem, quais serviços estão documentados, quais decisões foram tomadas, quais padrões foram registrados e quais páginas são mais importantes.
+`rawindex.md` should continue to be the index of ingested raw sources. `index.md`, on the other hand, should work as the conceptual map of the wiki: which projects exist, which services are documented, which decisions were made, which patterns were recorded, and which pages are the most important.
 
-### Por que isso é importante
+### Why this matters
 
-Hoje, uma busca textual resolve perguntas pontuais, mas não oferece uma visão geral da base de conhecimento. Um agente que inicia uma sessão precisa entender rapidamente “o que existe” antes de sair consultando páginas aleatórias.
+Today, text search solves specific questions, but it does not provide an overview of the knowledge base. An agent starting a session needs to quickly understand “what exists” before going around consulting random pages.
 
-Um `index.md` bem mantido permite:
+A well-maintained `index.md` allows for:
 
-- bootstrap mais inteligente da sessão;
-- melhor navegação humana;
-- melhor uso por agentes;
-- organização por projeto, domínio, serviço, decisão e padrão;
-- redução de páginas órfãs.
+- smarter session bootstrap;
+- better human navigation;
+- better use by agents;
+- organization by project, domain, service, decision, and pattern;
+- reduction of orphan pages.
 
-### Proposta de estrutura
+### Proposed structure
 
 ```text
 .advwiki/
@@ -39,33 +39,33 @@ Um `index.md` bem mantido permite:
     padrao-tool-calling-estrito.md
 ```
 
-Exemplo de conteúdo:
+Example content:
 
 ```markdown
-# Índice da Wiki
+# Wiki Index
 
-## Projetos
+## Projects
 
-- [[project-1-visao-geral]] — visão geral do `project-1`
-- [[project-2-visao-geral]] — visão geral do `project-2`
+- [[project-1-visao-geral]] — overview of `project-1`
+- [[project-2-visao-geral]] — overview of `project-2`
 
-## Serviços
+## Services
 
-- [[microservice-1-integracao-externa]] — integração do `microservice-1` com uma API externa via gRPC
-- [[microservice-2-ingestor]] — ingestão de eventos externos pelo `microservice-2`
+- [[microservice-1-integracao-externa]] — integration between `microservice-1` and an external API via gRPC
+- [[microservice-2-ingestor]] — ingestion of external events by `microservice-2`
 
-## Decisões Transversais
+## Cross-Cutting Decisions
 
 - [[decisao-vectores-por-escopo]]
 - [[decisao-mcp-como-camada-de-orquestracao]]
 
-## Padrões
+## Patterns
 
 - [[padrao-tool-calling-estrito]]
 - [[padrao-rag-documental-com-citacao]]
 ```
 
-### Possíveis tools
+### Possible tools
 
 ```text
 rebuild_wiki_index
@@ -73,37 +73,37 @@ read_wiki_index
 update_wiki_index
 ```
 
-### Prioridade
+### Priority
 
-Alta.
+High.
 
-Este item deve vir antes de recursos mais sofisticados, porque melhora imediatamente a utilidade da wiki e cria uma base para outras automações.
+This item should come before more sophisticated features, because it immediately improves the usefulness of the wiki and creates a foundation for other automations.
 
 ---
 
-## 2. Adicionar YAML frontmatter às páginas
+## 2. Add YAML frontmatter to pages
 
-### Objetivo
+### Goal
 
-Adicionar metadados estruturados no início das páginas Markdown.
+Add structured metadata at the top of Markdown pages.
 
-O conteúdo principal continua sendo Markdown livre, mas o frontmatter permite que o sistema entenda tipo, projeto, status, tags, fontes, páginas relacionadas, data de atualização e nível de confiança.
+The main content remains free-form Markdown, but frontmatter allows the system to understand type, project, status, tags, sources, related pages, update date, and confidence level.
 
-### Por que isso é importante
+### Why this matters
 
-Sem metadados, a wiki depende demais de busca textual. Com frontmatter, é possível criar ferramentas mais inteligentes, como:
+Without metadata, the wiki depends too much on text search. With frontmatter, it becomes possible to create smarter tools, such as:
 
-- listar páginas por projeto;
-- listar decisões;
-- encontrar páginas obsoletas;
-- encontrar páginas sem fonte;
-- gerar índice automaticamente;
-- criar grafos e backlinks;
-- filtrar por status;
-- priorizar páginas ativas;
-- separar documentação de serviço, bug, decisão, padrão, runbook etc.
+- listing pages by project;
+- listing decisions;
+- finding obsolete pages;
+- finding pages without a source;
+- generating the index automatically;
+- creating graphs and backlinks;
+- filtering by status;
+- prioritizing active pages;
+- separating service docs, bugs, decisions, patterns, runbooks, etc.
 
-### Exemplo
+### Example
 
 ```markdown
 ---
@@ -120,30 +120,30 @@ related:
   - microservice-1-integracao-externa
 tags:
   - mcp
-  - arquitetura
+  - architecture
   - backend
 ---
 
-# project-1 — Visão Geral
+# project-1 — Overview
 ```
 
-### Campos sugeridos
+### Suggested fields
 
 ```yaml
 type: service | decision | pattern | bug | runbook | integration | overview | note
-project: nome-do-projeto
+project: project-name
 status: active | draft | deprecated | stale
-created_at: data ISO
-updated_at: data ISO
+created_at: ISO date
+updated_at: ISO date
 confidence: low | medium | high
 sources: []
 related: []
 tags: []
-owner: opcional
-code_refs: opcional
+owner: optional
+code_refs: optional
 ```
 
-### Possíveis tools
+### Possible tools
 
 ```text
 list_pages_by_project
@@ -153,122 +153,122 @@ find_stale_pages
 find_pages_without_sources
 ```
 
-### Prioridade
+### Priority
 
-Alta.
+High.
 
-O frontmatter é uma fundação. Quanto antes for adotado, menor o custo de migração futura.
+Frontmatter is a foundation. The earlier it is adopted, the lower the future migration cost.
 
 ---
 
-## 3. Fortalecer `lint_wiki`
+## 3. Strengthen `lint_wiki`
 
-### Objetivo
+### Goal
 
-Transformar o `lint_wiki` em uma ferramenta central de manutenção da qualidade da base de conhecimento.
+Turn `lint_wiki` into a central tool for maintaining the quality of the knowledge base.
 
-Ela não deve apenas validar estrutura básica. Deve ajudar a encontrar problemas reais da wiki: links quebrados, páginas órfãs, páginas obsoletas, decisões sem justificativa, fontes brutas sem página derivada e conceitos recorrentes ainda não documentados.
+It should not just validate basic structure. It should help find real wiki problems: broken links, orphan pages, obsolete pages, decisions without justification, raw sources without a derived page, and recurring concepts that are still undocumented.
 
-### Por que isso é importante
+### Why this matters
 
-Uma wiki mantida por agentes pode crescer rápido, mas também pode se degradar rápido.
+A wiki maintained by agents can grow fast, but it can also degrade fast.
 
-Problemas comuns:
+Common problems:
 
-- páginas duplicadas;
-- links quebrados;
-- páginas sem fonte;
-- decisões sem contexto;
-- páginas desatualizadas;
-- documentação que contradiz outra página;
-- informações importantes escondidas apenas em raw sources;
-- páginas grandes demais;
-- conceitos importantes repetidos em vários lugares sem página própria.
+- duplicate pages;
+- broken links;
+- pages without a source;
+- decisions without context;
+- outdated pages;
+- documentation that contradicts another page;
+- important information hidden only in raw sources;
+- pages that are too large;
+- important concepts repeated in several places without their own page.
 
-O `lint_wiki` deve funcionar como um “revisor arquitetural” da wiki.
+`lint_wiki` should work like an “architectural reviewer” for the wiki.
 
-### Escopos sugeridos
+### Suggested scopes
 
 ```text
 quick:
-  - frontmatter ausente
-  - links quebrados
-  - páginas órfãs
-  - páginas sem atualização recente
-  - páginas sem "Veja também"
-  - raw sources sem página derivada
+  - missing frontmatter
+  - broken links
+  - orphan pages
+  - pages without recent updates
+  - pages without a "See also"
+  - raw sources without a derived page
 
 full:
-  - possíveis contradições
-  - conceitos recorrentes sem página própria
-  - decisões sem rationale
-  - integrações citadas sem página dedicada
-  - páginas muito grandes
-  - páginas com baixa confiança
-  - páginas stale por mudança no código
+  - possible contradictions
+  - recurring concepts without their own page
+  - decisions without rationale
+  - cited integrations without a dedicated page
+  - overly large pages
+  - pages with low confidence
+  - stale pages due to code changes
 ```
 
-### Exemplo de saída
+### Example output
 
 ```markdown
-# Relatório de Lint da Wiki
+# Wiki Lint Report
 
-## Links quebrados
+## Broken links
 
-- `project-1-arquitetura` aponta para `project-1-deploy`, mas a página não existe.
+- `project-1-arquitetura` points to `project-1-deploy`, but the page does not exist.
 
-## Páginas órfãs
+## Orphan pages
 
 - `bug-cdn-spa-access-denied`
 - `decisao-mcp-tools`
 
-## Conceitos recorrentes sem página própria
+## Recurring concepts without their own page
 
-- "vector store por escopo" aparece em 4 páginas, mas não há uma página dedicada.
+- "vector store per scope" appears in 4 pages, but there is no dedicated page.
 
-## Decisões sem rationale
+## Decisions without rationale
 
 - `decisao-cache-de-sessao`
 ```
 
-### Prioridade
+### Priority
 
-Alta.
+High.
 
-Depois de `index.md` e frontmatter, este é provavelmente o item com maior impacto prático.
+After `index.md` and frontmatter, this is probably the item with the biggest practical impact.
 
 ---
 
-## 4. Criar grafo de links e backlinks
+## 4. Create a link graph and backlinks
 
-### Objetivo
+### Goal
 
-Permitir que a wiki seja navegada como um grafo de conhecimento.
+Allow the wiki to be navigated as a knowledge graph.
 
-As páginas deveriam poder apontar umas para as outras com links no estilo Obsidian:
+Pages should be able to point to each other using Obsidian-style links:
 
 ```markdown
-Veja também:
+See also:
 - [[project-1-arquitetura]]
 - [[microservice-1-integracao-externa]]
 - [[decisao-vetores-por-escopo]]
 ```
 
-O sistema deve conseguir descobrir:
+The system should be able to discover:
 
-- quais páginas apontam para uma página;
-- quais páginas não recebem nenhum link;
-- quais páginas são hubs;
-- quais decisões afetam quais serviços;
-- quais integrações conectam quais componentes.
+- which pages point to a page;
+- which pages receive no links;
+- which pages are hubs;
+- which decisions affect which services;
+- which integrations connect which components.
 
-### Por que isso é importante
+### Why this matters
 
-Em projetos de software, o conhecimento não é linear. Uma decisão pode afetar vários serviços; uma integração pode depender de uma decisão transversal; um bug pode revelar um problema de arquitetura.
+In software projects, knowledge is not linear. A decision may affect several services; an integration may depend on a cross-cutting decision; a bug may reveal an architectural problem.
 
-O grafo ajuda tanto humanos quanto agentes a entender relações.
+The graph helps both humans and agents understand relationships.
 
-### Possíveis tools
+### Possible tools
 
 ```text
 wiki_graph
@@ -278,72 +278,72 @@ related_pages
 link_suggestions
 ```
 
-### Exemplo de uso
+### Example usage
 
 ```text
 backlinks(uri="wiki://page/decisao-vetores-por-escopo")
 ```
 
-Saída esperada:
+Expected output:
 
 ```markdown
-# Backlinks para `decisao-vetores-por-escopo`
+# Backlinks for `decisao-vetores-por-escopo`
 
 - `project-1-arquitetura`
 - `project-1-documentos`
 - `project-1-sessao-chat`
 ```
 
-### Prioridade
+### Priority
 
-Média-alta.
+Medium-high.
 
-Deve vir depois de `index.md` e frontmatter, porque depende de uma organização mínima da wiki.
+This should come after `index.md` and frontmatter, because it depends on a minimum amount of wiki organization.
 
 ---
 
-## 5. Introduzir plano de alteração e diff antes de escrita
+## 5. Introduce change planning and diff before writing
 
-### Objetivo
+### Goal
 
-Reduzir o risco de o agente degradar páginas existentes usando apenas `append` ou `overwrite`.
+Reduce the risk of the agent degrading existing pages by using only `append` or `overwrite`.
 
-Em vez de escrever diretamente, o MCP pode oferecer uma etapa intermediária: propor a alteração antes de aplicá-la.
+Instead of writing directly, the MCP can offer an intermediate step: propose the change before applying it.
 
-### Por que isso é importante
+### Why this matters
 
-`append` é simples, mas pode criar páginas repetitivas e desorganizadas.
+`append` is simple, but it can create repetitive and disorganized pages.
 
-`overwrite` é poderoso, mas perigoso.
+`overwrite` is powerful, but dangerous.
 
-Um fluxo com plano e diff permite:
+A flow with plan and diff makes it possible to:
 
-- revisar o que será alterado;
-- saber quais seções serão tocadas;
-- preservar conteúdo existente;
-- auditar racional da mudança;
-- evitar perda acidental;
-- permitir aprovação humana, quando necessário.
+- review what will be changed;
+- know which sections will be touched;
+- preserve existing content;
+- audit the reasoning behind the change;
+- avoid accidental loss;
+- allow human approval, when necessary.
 
-### Tools sugeridas
+### Suggested tools
 
 ```text
 propose_page_update
 apply_page_update
 ```
 
-### Exemplo de plano
+### Example plan
 
 ```json
 {
   "target": "wiki://page/project-1-arquitetura",
   "operation": "patch",
-  "reason": "nova decisão sobre escopo dos vector stores",
+  "reason": "new decision about vector store scope",
   "changes": [
     {
-      "section": "Decisões Tomadas",
+      "section": "Decisions Made",
       "action": "add_bullet",
-      "content": "Separar vector stores em tenant, projeto e sessão."
+      "content": "Separate vector stores into tenant, project, and session."
     }
   ],
   "affected_links": [
@@ -353,27 +353,27 @@ apply_page_update
 }
 ```
 
-### Prioridade
+### Priority
 
-Média-alta.
+Medium-high.
 
-É especialmente importante quando a wiki começar a ser usada em projetos reais e com páginas longas.
+It becomes especially important when the wiki starts being used in real projects and with long pages.
 
 ---
 
-## 6. Criar tools semânticas de domínio
+## 6. Create semantic domain tools
 
-### Objetivo
+### Goal
 
-Adicionar tools mais específicas que capturem conhecimento arquitetural de forma estruturada, em vez de depender apenas de `update_page`.
+Add more specific tools that capture architectural knowledge in a structured way, instead of depending only on `update_page`.
 
-### Por que isso é importante
+### Why this matters
 
-Tools genéricas são flexíveis, mas exigem muito do agente. Tools semânticas reduzem ambiguidade e melhoram a qualidade do conteúdo gerado.
+Generic tools are flexible, but they demand too much from the agent. Semantic tools reduce ambiguity and improve the quality of generated content.
 
-Em vez de pedir ao agente para criar Markdown livre, o MCP pode oferecer contratos específicos para tipos comuns de conhecimento.
+Instead of asking the agent to create free-form Markdown, the MCP can offer specific contracts for common kinds of knowledge.
 
-### Tools sugeridas
+### Suggested tools
 
 ```text
 record_architecture_decision
@@ -385,22 +385,22 @@ record_runbook
 record_external_dependency
 ```
 
-### Exemplo: decisão arquitetural
+### Example: architectural decision
 
 ```json
 {
   "decision_id": "decisao-vetores-por-escopo",
   "project": "project-1",
-  "title": "Separar vector stores por escopo",
-  "context": "O produto precisa lidar com documentos compartilhados da organização, arquivos por workspace e anexos por sessão.",
-  "decision": "Usar vector stores separados para tenant, workspace e sessão.",
+  "title": "Separate vector stores by scope",
+  "context": "The product needs to handle organization-wide shared documents, workspace-level files, and session attachments.",
+  "decision": "Use separate vector stores for tenant, workspace, and session.",
   "alternatives_rejected": [
-    "um único vector store global",
-    "apenas anexos por sessão"
+    "a single global vector store",
+    "session attachments only"
   ],
   "consequences": [
-    "melhora isolamento",
-    "aumenta complexidade de roteamento"
+    "improves isolation",
+    "increases routing complexity"
   ],
   "related_pages": [
     "project-1-arquitetura",
@@ -409,37 +409,37 @@ record_external_dependency
 }
 ```
 
-### Prioridade
+### Priority
 
-Média.
+Medium.
 
-Muito útil, mas é melhor criar depois de estabilizar o formato das páginas.
+Very useful, but it is better to create this after the page format is stabilized.
 
 ---
 
-## 7. Criar fluxo de ingestão curada
+## 7. Create a curated ingestion flow
 
-### Objetivo
+### Goal
 
-Evoluir a ingestão de conteúdo bruto para um fluxo em que o MCP ajuda a transformar fontes em conhecimento curado.
+Evolve raw content ingestion into a flow where the MCP helps transform sources into curated knowledge.
 
-Hoje, ingerir uma raw source preserva conteúdo, mas não necessariamente atualiza a wiki principal.
+Today, ingesting a raw source preserves content, but does not necessarily update the main wiki.
 
-A ingestão curada deve:
+A curated ingestion flow should:
 
-1. salvar o conteúdo bruto;
-2. buscar páginas relacionadas;
-3. propor páginas a criar ou alterar;
-4. apontar possíveis contradições;
-5. atualizar índice e links;
-6. registrar no log;
-7. rodar lint quick.
+1. save the raw content;
+2. search for related pages;
+3. propose pages to create or update;
+4. point out possible contradictions;
+5. update index and links;
+6. log the operation;
+7. run quick lint.
 
-### Por que isso é importante
+### Why this matters
 
-O valor principal da wiki não está em armazenar texto bruto. Está em transformar texto bruto em páginas organizadas, resumidas, linkadas e úteis.
+The main value of the wiki is not in storing raw text. It is in transforming raw text into organized, summarized, linked, and useful pages.
 
-### Tools sugeridas
+### Suggested tools
 
 ```text
 ingest_extracted_content
@@ -447,75 +447,75 @@ propose_ingest_plan
 apply_ingest_plan
 ```
 
-### Exemplo de plano
+### Example plan
 
 ```markdown
-# Plano de Ingestão
+# Ingestion Plan
 
-## Fonte salva
+## Saved source
 
 - `raw://source/session-2026-05-11`
 
-## Páginas relacionadas encontradas
+## Related pages found
 
 - `project-1-arquitetura`
 - `project-1-documentos`
 - `decisao-vetores-por-escopo`
 
-## Atualizações propostas
+## Proposed updates
 
-- Criar `project-1-politica-documentos`
-- Atualizar `project-1-arquitetura`
-- Adicionar backlink em `project-1-visao-geral`
+- Create `project-1-politica-documentos`
+- Update `project-1-arquitetura`
+- Add a backlink to `project-1-visao-geral`
 
-## Possíveis lacunas
+## Possible gaps
 
-- Não existe runbook de reindexação de documentos.
+- There is no document reindexing runbook.
 ```
 
-### Prioridade
+### Priority
 
-Média.
+Medium.
 
-É uma evolução natural depois das tools semânticas e do diff.
+It is a natural evolution after semantic tools and diff.
 
 ---
 
-## 8. Registrar claims rastreáveis
+## 8. Record traceable claims
 
-### Objetivo
+### Goal
 
-Permitir que afirmações importantes da wiki tenham origem, confiança e data de verificação.
+Allow important wiki statements to have origin, confidence, and verification date.
 
-### Por que isso é importante
+### Why this matters
 
-Arquitetura de software muda. Uma wiki pode ficar obsoleta ou conter afirmações sem lastro.
+Software architecture changes. A wiki can become obsolete or contain claims without grounding.
 
-Claims rastreáveis permitem responder:
+Traceable claims make it possible to answer:
 
-- de onde veio essa informação?
-- essa afirmação ainda é confiável?
-- quando foi verificada pela última vez?
-- há outra página dizendo o contrário?
-- isso veio de código, log, conversa, documentação ou decisão explícita?
+- where did this information come from?
+- is this statement still reliable?
+- when was it last verified?
+- is there another page saying the opposite?
+- did this come from code, log, conversation, documentation, or an explicit decision?
 
-### Exemplo
+### Example
 
 ```markdown
 ## Claims
 
-- A plataforma usa três escopos mínimos de vector store: tenant, workspace e sessão.
-  - Fonte: `wiki://page/decisao-vetores-por-escopo`
-  - Confiança: alta
-  - Última verificação: 2026-05-11
+- The platform uses three minimum vector store scopes: tenant, workspace, and session.
+  - Source: `wiki://page/decisao-vetores-por-escopo`
+  - Confidence: high
+  - Last verified: 2026-05-11
 
-- O `microservice-2` se comunica com uma API de processamento via gRPC bidirecional.
-  - Fonte: `raw://source/session-grpc-microservice-2-api-2026-05-11`
-  - Confiança: alta
-  - Última verificação: 2026-05-11
+- `microservice-2` communicates with a processing API via bidirectional gRPC.
+  - Source: `raw://source/session-grpc-microservice-2-api-2026-05-11`
+  - Confidence: high
+  - Last verified: 2026-05-11
 ```
 
-### Tools sugeridas
+### Suggested tools
 
 ```text
 find_claims
@@ -524,45 +524,45 @@ find_conflicting_claims
 verify_claim
 ```
 
-### Prioridade
+### Priority
 
-Média.
+Medium.
 
-É um recurso avançado, mas muito valioso para evitar “memória alucinada”.
+It is an advanced feature, but very valuable for avoiding “hallucinated memory”.
 
 ---
 
-## 9. Integrar versionamento Git opcional
+## 9. Integrate optional Git versioning
 
-### Objetivo
+### Goal
 
-Permitir que a wiki seja versionada com Git.
+Allow the wiki to be versioned with Git.
 
-Como o conhecimento está em Markdown e arquivos locais, Git é uma escolha natural para histórico, diff, rollback e colaboração.
+Since knowledge is stored as Markdown and local files, Git is a natural choice for history, diff, rollback, and collaboration.
 
-### Por que isso é importante
+### Why this matters
 
-Uma wiki mantida por agentes precisa ser auditável.
+A wiki maintained by agents needs to be auditable.
 
-Git oferece:
+Git provides:
 
-- histórico de mudanças;
-- comparação entre versões;
+- change history;
+- comparison between versions;
 - rollback;
 - branches;
-- commits com mensagens semânticas;
-- revisão humana via pull request;
-- sincronização com repositório remoto.
+- commits with semantic messages;
+- human review via pull request;
+- synchronization with a remote repository.
 
-### Modo sugerido
+### Suggested mode
 
-Adicionar uma flag opcional:
+Add an optional flag:
 
 ```text
 mcp-advwiki --root <PATH> --git
 ```
 
-### Tools sugeridas
+### Suggested tools
 
 ```text
 wiki_git_status
@@ -572,33 +572,33 @@ wiki_git_history
 wiki_git_rollback
 ```
 
-### Exemplo de commit
+### Example commit
 
 ```text
 docs(project-1): record vector store scoping decision
 ```
 
-### Prioridade
+### Priority
 
-Média.
+Medium.
 
-Não precisa ser obrigatório na primeira versão, mas é uma excelente opção para uso real.
+It does not need to be mandatory in the first version, but it is an excellent option for real-world use.
 
 ---
 
-## 10. Detectar obsolescência por referência ao código-fonte
+## 10. Detect obsolescence through source code references
 
-### Objetivo
+### Goal
 
-Permitir que páginas da wiki apontem para arquivos de código e que o sistema detecte quando esses arquivos mudaram.
+Allow wiki pages to point to code files and let the system detect when those files change.
 
-### Por que isso é importante
+### Why this matters
 
-Documentação arquitetural fica obsoleta principalmente quando o código muda e a wiki não acompanha.
+Architectural documentation becomes obsolete mainly when the code changes and the wiki does not follow along.
 
-Se uma página documenta uma classe, módulo ou fluxo, ela pode registrar referências ao código e hashes de última verificação.
+If a page documents a class, module, or flow, it can record code references and last verification hashes.
 
-### Exemplo de frontmatter
+### Example frontmatter
 
 ```yaml
 code_refs:
@@ -608,17 +608,17 @@ code_refs:
     last_seen_hash: def456
 ```
 
-### Exemplo de lint
+### Example lint
 
 ```markdown
-# Páginas possivelmente obsoletas
+# Possibly obsolete pages
 
 - `flow-microservice-1-handler`
-  - Referencia `handler.rs`
-  - O arquivo mudou desde a última verificação.
+  - References `handler.rs`
+  - The file has changed since the last verification.
 ```
 
-### Tools sugeridas
+### Suggested tools
 
 ```text
 scan_code_refs
@@ -626,33 +626,33 @@ mark_code_refs_verified
 find_stale_code_refs
 ```
 
-### Prioridade
+### Priority
 
-Média.
+Medium.
 
-Para uma wiki arquitetural de software, este recurso pode se tornar um grande diferencial.
+For an architectural software wiki, this feature could become a major differentiator.
 
 ---
 
-## 11. Preparar busca híbrida opcional
+## 11. Prepare optional hybrid search
 
-### Objetivo
+### Goal
 
-Preparar o mecanismo de busca para suportar, no futuro, modos além do BM25.
+Prepare the search engine to support, in the future, modes beyond BM25.
 
-O BM25 é simples, rápido e excelente para termos exatos. Mas, com uma wiki grande, pode ser útil adicionar busca semântica e reranking.
+BM25 is simple, fast, and excellent for exact terms. But with a large wiki, it may be useful to add semantic search and reranking.
 
-### Por que isso é importante
+### Why this matters
 
-A wiki pode crescer e as perguntas podem ficar mais semânticas:
+The wiki can grow and the questions can become more semantic:
 
-- “como lidamos com falha temporária de integração?”
-- “qual decisão explica esse padrão de retry?”
-- “onde documentamos isolamento de tenant?”
+- “how do we handle temporary integration failure?”
+- “which decision explains this retry pattern?”
+- “where do we document tenant isolation?”
 
-Essas perguntas nem sempre usam os mesmos termos que as páginas.
+Those questions do not always use the same terms as the pages.
 
-### Modos sugeridos
+### Suggested modes
 
 ```rust
 enum SearchMode {
@@ -662,176 +662,176 @@ enum SearchMode {
 }
 ```
 
-### Tool sugerida
+### Suggested tool
 
 ```json
 {
-  "question": "como funciona o fluxo de upload de documentos?",
+  "question": "how does the document upload flow work?",
   "mode": "hybrid",
   "maxPages": 8
 }
 ```
 
-### Prioridade
+### Priority
 
-Baixa-média.
+Low-medium.
 
-Não deve ser prioridade antes de melhorar a estrutura da wiki. Uma wiki bem organizada com BM25 pode ir longe.
+This should not be a priority before improving the wiki structure. A well-organized wiki with BM25 can already go a long way.
 
 ---
 
-## 12. Criar bootstrap de sessão mais inteligente
+## 12. Create smarter session bootstrap
 
-### Objetivo
+### Goal
 
-Oferecer uma tool dedicada para recuperar o contexto inicial de um projeto ou serviço.
+Offer a dedicated tool to retrieve the initial context of a project or service.
 
-Em vez de o agente chamar várias buscas soltas, ele poderia chamar:
+Instead of the agent making several loose searches, it could call:
 
 ```text
 bootstrap_context(project="project-1")
 ```
 
-### Por que isso é importante
+### Why this matters
 
-Ao iniciar uma conversa sobre um projeto, o agente precisa saber:
+When starting a conversation about a project, the agent needs to know:
 
-- quais páginas centrais existem;
-- quais decisões recentes foram registradas;
-- quais lacunas são conhecidas;
-- quais páginas estão stale;
-- quais serviços ou módulos são relevantes.
+- which central pages exist;
+- which recent decisions were recorded;
+- which gaps are known;
+- which pages are stale;
+- which services or modules are relevant.
 
-### Exemplo de saída
+### Example output
 
 ```markdown
-# Contexto inicial — `project-1`
+# Initial context — `project-1`
 
-## Páginas centrais
+## Central pages
 
 - `project-1-visao-geral`
 - `project-1-arquitetura`
 - `microservice-1-integracao-externa`
 
-## Atualizações recentes
+## Recent updates
 
-- 2026-05-11: registrada decisão sobre vector stores.
-- 2026-05-10: documentado problema de CDN para SPA.
+- 2026-05-11: vector store decision recorded.
+- 2026-05-10: CDN issue for SPA documented.
 
-## Possíveis lacunas
+## Possible gaps
 
-- Não há página sobre política de versionamento de documentos.
-- Não há runbook completo de deploy.
+- There is no page about document versioning policy.
+- There is no complete deployment runbook.
 ```
 
-### Prioridade
+### Priority
 
-Média-alta.
+Medium-high.
 
-Depois do `index.md`, este recurso melhora muito o uso cotidiano da skill.
+After `index.md`, this feature greatly improves day-to-day use of the skill.
 
 ---
 
-## 13. Criar modo de revisão arquitetural
+## 13. Create an architectural review mode
 
-### Objetivo
+### Goal
 
-Adicionar uma capacidade de diagnóstico da própria wiki/projeto.
+Add a diagnostic capability for the wiki/project itself.
 
-A tool não responderia uma pergunta específica. Ela revisaria a memória arquitetural e sugeriria melhorias.
+The tool would not answer a specific question. It would review the architectural memory and suggest improvements.
 
-### Por que isso é importante
+### Why this matters
 
-Com o tempo, a wiki pode revelar lacunas no próprio projeto:
+Over time, the wiki may reveal gaps in the project itself:
 
-- decisões implícitas ainda não registradas;
-- riscos recorrentes;
-- falta de runbooks;
-- integrações sem contrato documentado;
-- áreas com documentação fraca;
-- padrões usados mas não nomeados.
+- implicit decisions that are still not recorded;
+- recurring risks;
+- missing runbooks;
+- integrations without a documented contract;
+- weakly documented areas;
+- patterns being used but not named.
 
-### Tool sugerida
+### Suggested tool
 
 ```text
 review_project_memory
 ```
 
-### Exemplo de saída
+### Example output
 
 ```markdown
-# Diagnóstico Arquitetural — `project-1`
+# Architectural Diagnosis — `project-1`
 
-## Decisões bem documentadas
+## Well-documented decisions
 
-- Vector stores por escopo
-- Comunicação gRPC com API de processamento
+- Vector stores by scope
+- gRPC communication with a processing API
 
-## Decisões implícitas, mas não registradas
+## Implicit decisions, but not yet recorded
 
-- Estratégia de isolamento multi-tenant
-- Política de retenção de sessões e anexos
+- Multi-tenant isolation strategy
+- Session and attachment retention policy
 
-## Riscos arquiteturais
+## Architectural risks
 
-- Falta runbook de recuperação de falha no canal gRPC.
-- Falta documentação de limites dos anexos por sessão.
+- Missing recovery runbook for gRPC channel failure.
+- Missing documentation for attachment limits per session.
 
-## Próximas páginas recomendadas
+## Recommended next pages
 
 - `project-1-runbook-grpc-microservice-1`
 - `project-1-politica-retencao-documentos`
 - `decisao-isolamento-multitenant`
 ```
 
-### Prioridade
+### Priority
 
-Média.
+Medium.
 
-Pode virar um dos recursos mais interessantes do projeto, especialmente para uso por arquitetos e tech leads.
-
----
-
-# Ordem sugerida de implementação
-
-## Fase 1 — Fundação da wiki
-
-1. Criar `index.md` navegável.
-2. Adicionar YAML frontmatter.
-3. Melhorar `lint_wiki` para links, órfãos e metadados.
-4. Criar backlinks/grafo básico.
-
-## Fase 2 — Escrita mais segura
-
-5. Criar plano de alteração + diff.
-6. Criar tools semânticas de domínio.
-7. Criar fluxo de ingestão curada.
-
-## Fase 3 — Qualidade e auditoria
-
-8. Registrar claims rastreáveis.
-9. Integrar Git opcional.
-10. Detectar obsolescência por referência ao código.
-
-## Fase 4 — Inteligência de uso
-
-11. Preparar busca híbrida opcional.
-12. Criar bootstrap de sessão.
-13. Criar modo de revisão arquitetural.
+This could become one of the most interesting features in the project, especially for use by architects and tech leads.
 
 ---
 
-# Critério de sucesso
+# Suggested implementation order
 
-O `mcp-advwiki` deve evoluir para um sistema em que o agente consiga:
+## Phase 1 — Wiki foundation
 
-- descobrir rapidamente o que já se sabe sobre um projeto;
-- responder usando memória persistente sem inventar contexto;
-- registrar novas decisões de forma estruturada;
-- preservar fontes brutas sem misturá-las com conhecimento curado;
-- manter links e índice navegáveis;
-- detectar documentação obsoleta;
-- revisar a qualidade da própria wiki;
-- permitir auditoria das mudanças feitas pelo agente.
+1. Create navigable `index.md`.
+2. Add YAML frontmatter.
+3. Improve `lint_wiki` for links, orphans, and metadata.
+4. Create basic backlinks/graph.
 
-Em resumo: o objetivo não é apenas ter busca local. O objetivo é criar uma **memória arquitetural persistente, navegável, auditável e incremental** para projetos de software.
+## Phase 2 — Safer writing
+
+5. Create change plan + diff.
+6. Create semantic domain tools.
+7. Create curated ingestion flow.
+
+## Phase 3 — Quality and auditability
+
+8. Record traceable claims.
+9. Integrate optional Git.
+10. Detect obsolescence through code references.
+
+## Phase 4 — Usage intelligence
+
+11. Prepare optional hybrid search.
+12. Create session bootstrap.
+13. Create architectural review mode.
+
+---
+
+# Success criteria
+
+`mcp-advwiki` should evolve into a system where the agent can:
+
+- quickly discover what is already known about a project;
+- answer using persistent memory without inventing context;
+- record new decisions in a structured way;
+- preserve raw sources without mixing them with curated knowledge;
+- keep links and the index navigable;
+- detect obsolete documentation;
+- review the quality of the wiki itself;
+- allow auditing of changes made by the agent.
+
+In short: the goal is not just to have local search. The goal is to create a **persistent, navigable, auditable, and incremental architectural memory** for software projects.
