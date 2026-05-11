@@ -43,7 +43,7 @@ Think of AdvWiki as a persistence layer between you and the AI. Everything the A
 If you're just trying to use AdvWiki in Claude Desktop or another MCP client, the easiest path is installing it globally with npm:
 
 ```bash
-npm install -g github:dfalci/mcp-advwiki
+npm install -g mcp-advwiki@latest
 ```
 
 That gives you the `mcp-advwiki` command in your terminal, so you can run it directly:
