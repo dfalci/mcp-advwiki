@@ -8,3 +8,5 @@ Cargo.lock
 *.iml
 rawindex.md
 .advwikilog.md
+*.bat
+*.sh
