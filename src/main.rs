@@ -34,10 +34,10 @@ Uso:
   mcp-advwiki -h, --help             show this help message
 
 Opcoes:
-  -r, --root <PATH>  pasta-base do sistema operacional onde
+  -r, --root <PATH>  basedir from where the files
                      `.advwiki/`, `.advwikilog.md` e `rawindex.md`
-                     serao lidos/criados.
-                     padrao: diretorio corrente da execucao
+                     will be read/created.
+                     defaults execution dir.
   -h, --help         show this help message
 
 Claude Desktop configuration (claude_desktop_config.json):
@@ -45,7 +45,7 @@ Claude Desktop configuration (claude_desktop_config.json):
     "mcpServers": {
       "advwiki": {
         "command": "mcp-advwiki",
-        "args": ["--root", "C:\\caminho\\do\\projeto"]
+        "args": ["--root", "/path/to/wiki/root"]
       }
     }
   }
