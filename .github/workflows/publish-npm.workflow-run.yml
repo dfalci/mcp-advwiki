@@ -37,14 +37,16 @@ jobs:
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Require NPM_TOKEN
         shell: bash
         run: |
+          set -euo pipefail
+
           if [ -z "$NODE_AUTH_TOKEN" ]; then
             echo "NPM_TOKEN secret is not configured"
             exit 1
@@ -59,8 +61,6 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ inputs.tag }}"
           else
-            # For tag-triggered workflow_run events, GitHub usually exposes the tag
-            # in workflow_run.head_branch. We still validate it against Releases below.
             TAG="${{ github.event.workflow_run.head_branch }}"
           fi
 
@@ -101,15 +101,23 @@ jobs:
             --pattern "*-npm-package.tar.gz" \
             --dir artifacts
 
-          PACKAGE="$(find artifacts -maxdepth 1 -name '*-npm-package.tar.gz' | head -n 1)"
+          PACKAGE="$(find artifacts -maxdepth 1 -type f -name '*-npm-package.tar.gz' | head -n 1)"
 
           if [ -z "$PACKAGE" ]; then
             echo "No npm package artifact found in the release assets"
             exit 1
           fi
 
-          echo "PACKAGE=$PACKAGE" >> "$GITHUB_ENV"
-          echo "Resolved package: $PACKAGE"
+          echo "Downloaded artifacts:"
+          ls -lah artifacts
+
+          echo "Inspecting npm package tarball:"
+          tar -tzf "$PACKAGE" | head -n 40
+
+          # npm can interpret paths without ./ as package specs, including GitHub shorthand.
+          # Keep an explicit relative path so npm treats this as a local tarball.
+          echo "PACKAGE=./$PACKAGE" >> "$GITHUB_ENV"
+          echo "Resolved package: ./$PACKAGE"
 
       - name: Resolve release prerelease flag
         id: release
