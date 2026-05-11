@@ -294,3 +294,47 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+
+  publish-npm:
+    needs:
+      - plan
+      - host
+    if: ${{ always() && needs.host.result == 'success' && needs.plan.outputs.publishing == 'true' }}
+    runs-on: "ubuntu-22.04"
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Require NPM_TOKEN
+        shell: bash
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "NPM_TOKEN secret is not configured"
+            exit 1
+          fi
+      - name: Download GitHub Artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: artifacts-*
+          path: artifacts
+          merge-multiple: true
+      - name: Publish npm package
+        shell: bash
+        run: |
+          PACKAGE="$(find artifacts -maxdepth 1 -name '*-npm-package.tar.gz' | head -n 1)"
+
+          if [ -z "$PACKAGE" ]; then
+            echo "No npm package artifact found"
+            exit 1
+          fi
+
+          if [ "${{ fromJson(needs.host.outputs.val).announcement_is_prerelease }}" = "true" ]; then
+            npm publish "$PACKAGE" --access public --tag next
+          else
+            npm publish "$PACKAGE" --access public
+          fi
+
