@@ -1,1 +1,9 @@
 /target
+/.advwiki
+/.deepseek
+/.openclaude
+/.idea
+/%SystemDrive%
+Cargo.lock
+*.iml
+rawindex.md

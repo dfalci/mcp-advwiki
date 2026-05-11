@@ -17,9 +17,9 @@ use anyhow::Context;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
+use tantivy::query::{AllQuery, BooleanQuery, Occur, Query, QueryParser, TermQuery};
 use tantivy::schema::*;
-use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
+use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term, doc};
 
 // rstruturas de dados
 
@@ -34,6 +34,35 @@ pub struct SearchResult {
     pub score: f32,
     /// Trecho do conteúdo (primeiros 300 caracteres).
     pub snippet: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentKind {
+    Page,
+    Raw,
+}
+
+impl DocumentKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Page => "page",
+            Self::Raw => "raw",
+        }
+    }
+}
+
+fn escape_for_tantivy(query: &str) -> String {
+    let mut escaped = String::with_capacity(query.len());
+    for ch in query.chars() {
+        if matches!(
+            ch,
+            '+' | '-' | '&' | '|' | '!' | '(' | ')' | '{' | '}' | '[' | ']' | '^' | '"' | '~' | '*' | '?' | ':' | '\\' | '/'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 /// motor de busca da Wiki baseado em Tantivy.
@@ -66,6 +95,7 @@ struct Fields {
     uri: Field,
     title: Field,
     content: Field,
+    kind: Field,
     last_modified: Field,
 }
 
@@ -79,6 +109,7 @@ impl Fields {
         // TEXT: tokenizado (default tokenizer)
         let title = schema_builder.add_text_field("title", TEXT | STORED);
         let content = schema_builder.add_text_field("content", TEXT | STORED);
+        let kind = schema_builder.add_text_field("kind", STRING | STORED);
         // I64: timestamp Unix em segundos, fast field para ordenação
         let last_modified = schema_builder.add_i64_field("last_modified", INDEXED | STORED | FAST);
 
@@ -89,6 +120,7 @@ impl Fields {
                 uri,
                 title,
                 content,
+                kind,
                 last_modified,
             },
             schema,
@@ -105,12 +137,27 @@ impl WikiSearchEngine {
 
         // abre ou cria o diretório do índice
         let index = if index_path.exists() {
-            Index::open_in_dir(&index_path)
-                .with_context(|| format!("Falha ao abrir índice em: {}", index_path.display()))?
+            match Index::open_in_dir(&index_path) {
+                Ok(index) => index,
+                Err(error) => {
+                    tracing::warn!(
+                        path = %index_path.display(),
+                        error = %error,
+                        "Falha ao abrir índice existente; recriando diretório do índice"
+                    );
+                    std::fs::remove_dir_all(&index_path).with_context(|| {
+                        format!("Falha ao remover diretório do índice incompatível: {}", index_path.display())
+                    })?;
+                    std::fs::create_dir_all(&index_path)
+                        .with_context(|| format!("Falha ao recriar diretório do índice: {}", index_path.display()))?;
+                    Index::create_in_dir(&index_path, schema.clone())
+                        .with_context(|| format!("Falha ao recriar índice em: {}", index_path.display()))?
+                }
+            }
         } else {
             std::fs::create_dir_all(&index_path)
                 .with_context(|| format!("Falha ao criar diretório do índice: {}", index_path.display()))?;
-            Index::create_in_dir(&index_path, schema)
+            Index::create_in_dir(&index_path, schema.clone())
                 .with_context(|| format!("Falha ao criar índice em: {}", index_path.display()))?
         };
 
@@ -159,6 +206,7 @@ impl WikiSearchEngine {
     /// - `last_modified`: Timestamp Unix em segundos da última modificação.
     pub fn index_document(
         &self,
+        kind: DocumentKind,
         uri: &str,
         title: &str,
         content: &str,
@@ -168,7 +216,7 @@ impl WikiSearchEngine {
         let mut writer = self.writer.lock().unwrap();
 
         // remove documento existente com a mesma URI (upsert)
-        let uri_term = tantivy::Term::from_field_text(fields.uri, uri);
+        let uri_term = Term::from_field_text(fields.uri, uri);
         writer.delete_term(uri_term);
 
         // adiciona o novo documento
@@ -177,6 +225,7 @@ impl WikiSearchEngine {
                 fields.uri => uri,
                 fields.title => title,
                 fields.content => content,
+                fields.kind => kind.as_str(),
                 fields.last_modified => last_modified,
             ))
             .with_context(|| format!("Falha ao indexar documento: {}", uri))?;
@@ -195,7 +244,7 @@ impl WikiSearchEngine {
         let fields = &self.fields;
         let mut writer = self.writer.lock().unwrap();
 
-        let uri_term = tantivy::Term::from_field_text(fields.uri, uri);
+        let uri_term = Term::from_field_text(fields.uri, uri);
         writer.delete_term(uri_term);
 
         writer
@@ -206,24 +255,33 @@ impl WikiSearchEngine {
         Ok(())
     }
 
+    /// roda o clear no índice, removendo todos os documentos.
+    pub fn clear(&self) -> anyhow::Result<()> {
+        let mut writer = self.writer.lock().unwrap();
+        writer.delete_all_documents()?;
+        writer.commit()?;
+        Ok(())
+    }
+
     /// indexa todos os documentos de uma vez (bulk index).
     ///
     /// útil para rebuild completo do índice a partir do disco.
-    /// cada tupla contém `(uri, title, content, last_modified)`.
-    pub fn index_bulk(&self, documents: &[(String, String, String, i64)]) -> anyhow::Result<u64> {
+    /// cada tupla contém `(kind, uri, title, content, last_modified)`.
+    pub fn index_bulk(&self, documents: &[(DocumentKind, String, String, String, i64)]) -> anyhow::Result<u64> {
         let fields = &self.fields;
         let mut writer = self.writer.lock().unwrap();
         let mut count = 0u64;
 
-        for (uri, title, content, last_modified) in documents {
+        for (kind, uri, title, content, last_modified) in documents {
             // Remove documento existente
-            let uri_term = tantivy::Term::from_field_text(fields.uri, uri);
+            let uri_term = Term::from_field_text(fields.uri, uri);
             writer.delete_term(uri_term);
 
             writer.add_document(doc!(
                 fields.uri => uri.as_str(),
                 fields.title => title.as_str(),
                 fields.content => content.as_str(),
+                fields.kind => kind.as_str(),
                 fields.last_modified => *last_modified,
             ))?;
             count += 1;
@@ -247,6 +305,15 @@ impl WikiSearchEngine {
     ///
     /// Retorna os resultados ordenados por score BM25 (decrescente).
     pub fn search(&self, query_str: &str, limit: usize) -> anyhow::Result<Vec<SearchResult>> {
+        self.search_with_kind_filter(query_str, limit, None)
+    }
+
+    pub fn search_with_kind_filter(
+        &self,
+        query_str: &str,
+        limit: usize,
+        kind: Option<DocumentKind>,
+    ) -> anyhow::Result<Vec<SearchResult>> {
         let fields = &self.fields;
         let reader = &self.reader;
 
@@ -255,16 +322,34 @@ impl WikiSearchEngine {
 
         let searcher = reader.searcher();
 
-        // Query parser nos campos title e content
-        let query_parser = QueryParser::for_index(&self.index, vec![fields.title, fields.content]);
-        let query = query_parser
-            .parse_query(query_str)
-            .with_context(|| format!("Falha ao parsear query: '{}'", query_str))?;
+        let query: Box<dyn Query> = if query_str.trim().is_empty() {
+            Box::new(AllQuery)
+        } else {
+            let query_parser = QueryParser::for_index(&self.index, vec![fields.title, fields.content]);
+            let parsed = query_parser.parse_query(query_str).or_else(|_| {
+                let escaped = escape_for_tantivy(query_str);
+                query_parser.parse_query(&escaped)
+            });
+            Box::new(parsed.with_context(|| format!("Falha ao parsear query: '{}'", query_str))?)
+        };
+
+        let query: Box<dyn Query> = if let Some(kind) = kind {
+            let kind_term = Term::from_field_text(fields.kind, kind.as_str());
+            Box::new(BooleanQuery::from(vec![
+                (Occur::Must, query),
+                (
+                    Occur::Must,
+                    Box::new(TermQuery::new(kind_term, IndexRecordOption::Basic)),
+                ),
+            ]))
+        } else {
+            query
+        };
 
         // Busca top-K documentos ordenados por score BM25
         let collector = TopDocs::with_limit(limit).order_by_score();
         let top_docs: Vec<(tantivy::Score, tantivy::DocAddress)> = searcher
-            .search(&query, &collector)
+            .search(query.as_ref(), &collector)
             .context("Falha ao executar busca")?;
 
         let mut results = Vec::with_capacity(top_docs.len());
@@ -340,7 +425,7 @@ mod tests {
         let (engine, _dir) = test_engine();
 
         engine
-            .index_document("wiki://page/home", "Home", "Bem-vindo à AdvWiki!", 1000)
+            .index_document(DocumentKind::Page, "wiki://page/home", "Home", "Bem-vindo à AdvWiki!", 1000)
             .unwrap();
 
         let results = engine.search("Bem-vindo", 5).unwrap();
@@ -357,6 +442,7 @@ mod tests {
 
         engine
             .index_document(
+                DocumentKind::Page,
                 "wiki://page/rust",
                 "Rust Lang",
                 "Rust é uma linguagem de programação systems.",
@@ -365,6 +451,7 @@ mod tests {
             .unwrap();
         engine
             .index_document(
+                DocumentKind::Page,
                 "wiki://page/python",
                 "Python",
                 "Python é uma linguagem de scripting.",
@@ -381,10 +468,10 @@ mod tests {
         let (engine, _dir) = test_engine();
 
         engine
-            .index_document("wiki://page/api", "API v1", "Conteúdo antigo", 1000)
+            .index_document(DocumentKind::Page, "wiki://page/api", "API v1", "Conteúdo antigo", 1000)
             .unwrap();
         engine
-            .index_document("wiki://page/api", "API v2", "Conteúdo novo atualizado", 2000)
+            .index_document(DocumentKind::Page, "wiki://page/api", "API v2", "Conteúdo novo atualizado", 2000)
             .unwrap();
 
         let results = engine.search("atualizado", 5).unwrap();
@@ -401,6 +488,7 @@ mod tests {
 
         engine
             .index_document(
+                DocumentKind::Page,
                 "wiki://page/temp",
                 "Temp",
                 "Página temporária para teste de remoção",
@@ -423,7 +511,7 @@ mod tests {
         let (engine, _dir) = test_engine();
 
         engine
-            .index_document("wiki://page/only", "Only", "Apenas esta página", 1000)
+            .index_document(DocumentKind::Page, "wiki://page/only", "Only", "Apenas esta página", 1000)
             .unwrap();
 
         let results = engine.search("inexistente", 5).unwrap();
@@ -436,18 +524,21 @@ mod tests {
 
         let docs = vec![
             (
+                DocumentKind::Page,
                 "wiki://page/a".to_string(),
                 "A".to_string(),
                 "Conteúdo A".to_string(),
                 1000i64,
             ),
             (
+                DocumentKind::Page,
                 "wiki://page/b".to_string(),
                 "B".to_string(),
                 "Conteúdo B".to_string(),
                 1000i64,
             ),
             (
+                DocumentKind::Page,
                 "wiki://page/c".to_string(),
                 "C".to_string(),
                 "Conteúdo C".to_string(),
@@ -455,6 +546,7 @@ mod tests {
             ),
         ];
 
+        engine.clear().unwrap();
         let count = engine.index_bulk(&docs).unwrap();
         assert_eq!(count, 3);
         assert_eq!(engine.doc_count().unwrap(), 3);
@@ -468,14 +560,12 @@ mod tests {
         let (engine, _dir) = test_engine();
 
         engine
-            .index_document("wiki://page/x", "X", "abc", 1000)
+            .index_document(DocumentKind::Page, "wiki://page/x", "X", "abc", 1000)
             .unwrap();
 
-        // Query vazia: em Tantivy 0.26 pode retornar erro ou lista vazia
-        match engine.search("", 5) {
-            Ok(results) => assert!(results.is_empty(), "Query vazia deve retornar 0 resultados"),
-            Err(_) => {} // erro de parse também é aceitável
-        }
+        let results = engine.search("", 5).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].uri, "wiki://page/x");
     }
 
     #[test]
@@ -485,6 +575,7 @@ mod tests {
         let long_content = "A".repeat(500);
         engine
             .index_document(
+                DocumentKind::Page,
                 "wiki://page/long",
                 "Long Page",
                 &long_content,
@@ -498,5 +589,59 @@ mod tests {
         assert!(results[0].snippet.ends_with("..."));
         // Snippet deve ter no máximo ~303 caracteres (300 + "...")
         assert!(results[0].snippet.len() <= 303);
+    }
+
+    #[test]
+    fn test_search_with_kind_filter_returns_only_pages() {
+        let (engine, _dir) = test_engine();
+
+        for i in 0..3 {
+            engine
+                .index_document(
+                    DocumentKind::Raw,
+                    &format!("raw://source/{i}"),
+                    &format!("raw-{i}"),
+                    "alpha alpha alpha alpha alpha",
+                    1000,
+                )
+                .unwrap();
+        }
+
+        engine
+            .index_document(
+                DocumentKind::Page,
+                "wiki://page/alpha",
+                "Alpha Page",
+                "alpha de verdade na página",
+                1000,
+            )
+            .unwrap();
+
+        let results = engine
+            .search_with_kind_filter("alpha", 1, Some(DocumentKind::Page))
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].uri, "wiki://page/alpha");
+    }
+
+    #[test]
+    fn test_search_falls_back_to_escaped_natural_query() {
+        let (engine, _dir) = test_engine();
+
+        engine
+            .index_document(
+                DocumentKind::Page,
+                "wiki://page/fallback",
+                "fallback query",
+                "conteúdo com query natural",
+                1000,
+            )
+            .unwrap();
+
+        let results = engine.search("fallback \"query", 5).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].uri, "wiki://page/fallback");
     }
 }

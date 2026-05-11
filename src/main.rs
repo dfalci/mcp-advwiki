@@ -4,49 +4,132 @@ mod storage;
 mod watcher;
 
 use std::error::Error;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 const HELP_BANNER: &str = r#"
-╔══════════════════════════════════════════════════════╗
-║                                                      ║
+╔═══════════════════════════════════════════════════════╗
+║                                                       ║
 ║    ███╗   ███╗ ██████╗██████╗                         ║
 ║    ████╗ ████║██╔════╝██╔══██╗   █████╗               ║
 ║    ██╔████╔██║██║     ██████╔╝  ██╔══██╗              ║
 ║    ██║╚██╔╝██║██║     ██╔═══╝   ██║  ██║              ║
 ║    ██║ ╚═╝ ██║╚██████╗██║       ╚█████╔╝              ║
 ║    ╚═╝     ╚═╝ ╚═════╝╚═╝        ╚════╝               ║
-║                                                      ║
+║                                                       ║
 ║    █████╗ ██████╗ ██╗   ██╗██╗    ██╗██╗██╗  ██╗██╗   ║
 ║   ██╔══██╗██╔══██╗██║   ██║██║    ██║██║██║ ██╔╝██║   ║
 ║   ███████║██║  ██║██║   ██║██║ █╗ ██║██║█████╔╝ ██║   ║
 ║   ██╔══██║██║  ██║╚██╗ ██╔╝██║███╗██║██║██╔═██╗ ██║   ║
 ║   ██║  ██║██████╔╝ ╚████╔╝ ╚███╔███╔╝██║██║  ██╗██║   ║
 ║   ╚═╝  ╚═╝╚═════╝   ╚═══╝   ╚══╝╚══╝ ╚═╝╚═╝  ╚═╝╚═╝   ║
-║                                                      ║
-║     Servidor MCP — Wiki Local com Busca Full-Text     ║
-║              Desenvolvido por Daniel Falci            ║
-║                                                      ║
-╚══════════════════════════════════════════════════════╝
+║                                                       ║
+║     Server MCP — Wiki Local Full-Text Search          ║
+║           Developed by Daniel Falci                   ║
+║                                                       ║
+╚═══════════════════════════════════════════════════════╝
 
 Uso:
-  mcp-advwiki              Inicia o servidor MCP (escuta stdin/stdout)
-  mcp-advwiki -h, --help   Mostra esta ajuda
+  mcp-advwiki [--root <PATH>]        start the mcpserver (listen stdin/stdout)
+  mcp-advwiki -h, --help             show this help message
 
-Configuração para Claude Desktop (claude_desktop_config.json):
+Opcoes:
+  -r, --root <PATH>  pasta-base do sistema operacional onde
+                     `.advwiki/`, `.advwikilog.md` e `rawindex.md`
+                     serao lidos/criados.
+                     padrao: diretorio corrente da execucao
+  -h, --help         show this help message
+
+Claude Desktop configuration (claude_desktop_config.json):
   {
     "mcpServers": {
       "advwiki": {
         "command": "mcp-advwiki",
-        "args": []
+        "args": ["--root", "C:\\caminho\\do\\projeto"]
       }
     }
   }
 "#;
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct CliOptions {
+    root: Option<PathBuf>,
+    show_help: bool,
+}
+
+fn parse_cli_args(args: &[String]) -> Result<CliOptions, String> {
+    if args.iter().any(|arg| arg == "-h" || arg == "--help") {
+        return Ok(CliOptions {
+            show_help: true,
+            ..CliOptions::default()
+        });
+    }
+
+    let mut options = CliOptions::default();
+    let mut index = 0;
+
+    while index < args.len() {
+        let arg = &args[index];
+
+        match arg.as_str() {
+            "-r" | "--root" => {
+                let next = args
+                    .get(index + 1)
+                    .ok_or_else(|| format!("O parametro {arg} requer um caminho."))?;
+
+                if next.starts_with('-') {
+                    return Err(format!(
+                        "O parametro {arg} requer um caminho valido. Recebido: {next}"
+                    ));
+                }
+
+                set_root_option(&mut options, next)?;
+                index += 2;
+            }
+            _ if arg.starts_with("--root=") => {
+                let value = &arg["--root=".len()..];
+                set_root_option(&mut options, value)?;
+                index += 1;
+            }
+            _ if arg.starts_with("-r=") => {
+                let value = &arg["-r=".len()..];
+                set_root_option(&mut options, value)?;
+                index += 1;
+            }
+            _ => {
+                return Err(format!("Parametro desconhecido: {arg}"));
+            }
+        }
+    }
+
+    Ok(options)
+}
+
+fn set_root_option(options: &mut CliOptions, value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err("O parametro --root nao pode receber um caminho vazio.".to_string());
+    }
+
+    if options.root.is_some() {
+        return Err("O parametro --root foi informado mais de uma vez.".to_string());
+    }
+
+    options.root = Some(PathBuf::from(value));
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "-h" || a == "--help") {
+    let raw_args: Vec<String> = std::env::args().skip(1).collect();
+    let cli = match parse_cli_args(&raw_args) {
+        Ok(cli) => cli,
+        Err(message) => {
+            eprintln!("{message}\n\nUse -h ou --help para ver as opcoes disponiveis.");
+            std::process::exit(2);
+        }
+    };
+
+    if cli.show_help {
         println!("{HELP_BANNER}");
         return Ok(());
     }
@@ -59,9 +142,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tracing::info!("Iniciando o Servidor MCP AdvWiki...");
 
     //inicializa o gerenciador de arquivos
-    let wiki = Arc::new(storage::WikiFileManager::new(None));
+    let wiki = Arc::new(storage::WikiFileManager::new(cli.root));
     wiki.init().await?;
     tracing::info!(
+        root = %wiki.root().display(),
         wiki_dir = %wiki.wiki_dir().display(),
         "Wiki inicializada"
     );
@@ -101,6 +185,70 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{CliOptions, parse_cli_args};
+    use std::path::PathBuf;
+
+    #[test]
+    fn parse_cli_defaults_to_current_directory_behavior() {
+        let cli = parse_cli_args(&[]).expect("parse should succeed");
+        assert_eq!(
+            cli,
+            CliOptions {
+                root: None,
+                show_help: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_cli_accepts_root_with_separate_value() {
+        let cli = parse_cli_args(&["--root".into(), "C:\\repo".into()])
+            .expect("parse should succeed");
+
+        assert_eq!(cli.root, Some(PathBuf::from("C:\\repo")));
+        assert!(!cli.show_help);
+    }
+
+    #[test]
+    fn parse_cli_accepts_root_inline_value() {
+        let cli = parse_cli_args(&["--root=C:\\repo".into()])
+            .expect("parse should succeed");
+
+        assert_eq!(cli.root, Some(PathBuf::from("C:\\repo")));
+        assert!(!cli.show_help);
+    }
+
+    #[test]
+    fn parse_cli_prioritizes_help() {
+        let cli = parse_cli_args(&["--help".into(), "--root".into(), "C:\\repo".into()])
+            .expect("parse should succeed");
+
+        assert!(cli.show_help);
+        assert_eq!(cli.root, None);
+    }
+
+    #[test]
+    fn parse_cli_rejects_missing_root_value() {
+        let err = parse_cli_args(&["--root".into()]).expect_err("parse should fail");
+        assert!(err.contains("requer um caminho"));
+    }
+
+    #[test]
+    fn parse_cli_rejects_duplicate_root() {
+        let err = parse_cli_args(&[
+            "--root".into(),
+            "C:\\repo".into(),
+            "-r".into(),
+            "D:\\repo".into(),
+        ])
+        .expect_err("parse should fail");
+
+        assert!(err.contains("mais de uma vez"));
+    }
+}
+
 /// reage a um evento do sistema de arquivos atualizando o índice Tantivy.
 async fn handle_wiki_event(
     engine: &search::WikiSearchEngine,
@@ -117,7 +265,7 @@ async fn handle_wiki_event(
                     // o título é o slug com hífens substituídos por espaços
                     let title = slug.replace('-', " ");
                     let now = chrono::Utc::now().timestamp();
-                    if let Err(e) = engine.index_document(&uri, &title, &content, now) {
+                    if let Err(e) = engine.index_document(search::DocumentKind::Page, &uri, &title, &content, now) {
                         tracing::error!(%slug, error = %e, "Falha ao indexar página");
                     } else {
                         tracing::debug!(%slug, "Página indexada");
@@ -143,7 +291,7 @@ async fn handle_wiki_event(
             match wiki.read_raw_source(&source_id).await {
                 Ok(content) => {
                     let now = chrono::Utc::now().timestamp();
-                    if let Err(e) = engine.index_document(&uri, &source_id, &content, now) {
+                    if let Err(e) = engine.index_document(search::DocumentKind::Raw, &uri, &source_id, &content, now) {
                         tracing::error!(%source_id, error = %e, "Falha ao indexar raw source");
                     } else {
                         tracing::debug!(%source_id, "Raw source indexada");
@@ -165,7 +313,10 @@ async fn handle_wiki_event(
         }
 
         WikiEvent::IndexChanged => {
-            tracing::info!("rawindex.md alterado — reindexação completa pode ser necessária");
+            tracing::info!("rawindex.md alterado — iniciando rebuild completo do índice");
+            if let Err(e) = rebuild_index(wiki, engine).await {
+                tracing::error!(error = %e, "Falha ao reconstruir índice após alteração em rawindex.md");
+            }
         }
 
         WikiEvent::LogChanged => {
@@ -185,7 +336,7 @@ async fn rebuild_index(
     engine: &search::WikiSearchEngine,
 ) -> anyhow::Result<()> {
     let now = chrono::Utc::now().timestamp();
-    let mut docs: Vec<(String, String, String, i64)> = Vec::new();
+    let mut docs: Vec<(search::DocumentKind, String, String, String, i64)> = Vec::new();
 
     // páginas da Wiki
     match wiki.list_pages().await {
@@ -195,7 +346,7 @@ async fn rebuild_index(
                     Ok(content) => {
                         let uri = format!("wiki://page/{slug}");
                         let title = slug.replace('-', " ");
-                        docs.push((uri, title, content, now));
+                        docs.push((search::DocumentKind::Page, uri, title, content, now));
                     }
                     Err(e) => {
                         tracing::warn!(%slug, error = %e, "Falha ao ler página durante rebuild");
@@ -216,7 +367,7 @@ async fn rebuild_index(
                 match wiki.read_raw_source(source_id).await {
                     Ok(content) => {
                         let uri = format!("raw://source/{source_id}");
-                        docs.push((uri, source_id.clone(), content, now));
+                        docs.push((search::DocumentKind::Raw, uri, source_id.clone(), content, now));
                     }
                     Err(e) => {
                         tracing::warn!(%source_id, error = %e, "Falha ao ler raw source durante rebuild");
@@ -235,6 +386,7 @@ async fn rebuild_index(
         return Ok(());
     }
 
+    engine.clear()?;
     let count = engine.index_bulk(&docs)?;
     tracing::info!(count = %count, total_docs = %docs.len(), "Rebuild inicial do índice concluído");
 

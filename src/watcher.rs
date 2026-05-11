@@ -14,6 +14,7 @@
 //                                                                          (Tantivy)
 
 use anyhow::Context;
+use notify::event::{ModifyKind, RenameMode};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc as std_mpsc;
@@ -196,6 +197,69 @@ impl WikiWatcher {
 /// Usa comparação por caminhos brutos (não canonicalizados) para que eventos
 /// `Remove` não sejam perdidos — `path.canonicalize()` falha quando o arquivo
 /// já foi excluído.
+fn classify_single_path_event(
+    path: &Path,
+    kind: &EventKind,
+    root: &Path,
+    wiki_dir: &Path,
+) -> Option<WikiEvent> {
+    let pages_dir = wiki_dir.join("pages");
+    let sources_dir = wiki_dir.join("sources");
+    let metadata_dir = wiki_dir.join("metadata");
+    let expected_log = root.join(".advwikilog.md");
+    let expected_index = root.join("rawindex.md");
+
+    if path_is_in(path, &pages_dir) {
+        return extract_slug(path, &pages_dir).map(|slug| match kind {
+            EventKind::Create(_) => WikiEvent::PageCreated { slug },
+            EventKind::Modify(_) => WikiEvent::PageUpdated { slug },
+            EventKind::Remove(_) => WikiEvent::PageDeleted { slug },
+            _ => WikiEvent::Unknown(format!(
+                "Evento inesperado em página: {:?} → {}",
+                kind,
+                path.display()
+            )),
+        });
+    }
+
+    if path_equals(path, &expected_log) {
+        return Some(WikiEvent::LogChanged);
+    }
+    if path_equals(path, &expected_index) {
+        return Some(WikiEvent::IndexChanged);
+    }
+
+    if path_is_in(path, &sources_dir) || path_is_in(path, &metadata_dir) {
+        return Some(match extract_source_id(path, &sources_dir, &metadata_dir) {
+            Some(source_id) => match kind {
+                EventKind::Create(_) | EventKind::Modify(_) => {
+                    WikiEvent::RawSourceUpdated { source_id }
+                }
+                EventKind::Remove(_) => WikiEvent::RawSourceDeleted { source_id },
+                _ => WikiEvent::Unknown(format!(
+                    "Evento inesperado em raw source: {:?} → {}",
+                    kind,
+                    path.display()
+                )),
+            },
+            None => WikiEvent::Unknown(format!(
+                "Não foi possível extrair source_id de: {}",
+                path.display()
+            )),
+        });
+    }
+
+    if path_is_in(path, wiki_dir) {
+        return Some(WikiEvent::Unknown(format!(
+            "Alteração não classificada dentro da wiki: {} ({:?})",
+            path.display(),
+            kind
+        )));
+    }
+
+    None
+}
+
 fn translate_event(
     event: &Event,
     root: &Path,
@@ -206,79 +270,30 @@ fn translate_event(
         return Vec::new();
     }
 
-    // diretórios esperados (caminhos brutos)
-    let pages_dir = wiki_dir.join("pages");
-    let sources_dir = wiki_dir.join("sources");
-    let metadata_dir = wiki_dir.join("metadata");
-    let expected_log = root.join(".advwikilog.md");
-    let expected_index = root.join("rawindex.md");
-
-    let mut domain_events = Vec::new();
-
-    for path in &event.paths {
-        // páginas (.advwiki/pages/*.md)
-        if path_is_in(path, &pages_dir) {
-            if let Some(slug) = extract_slug(path, &pages_dir) {
-                let domain_event = match event.kind {
-                    EventKind::Create(_) => WikiEvent::PageCreated { slug },
-                    EventKind::Modify(_) => WikiEvent::PageUpdated { slug },
-                    EventKind::Remove(_) => WikiEvent::PageDeleted { slug },
-                    _ => WikiEvent::Unknown(format!(
-                        "Evento inesperado em página: {:?} → {}",
-                        event.kind,
-                        path.display()
-                    )),
-                };
-                domain_events.push(domain_event);
-            }
-            continue;
+    if matches!(
+        event.kind,
+        EventKind::Modify(ModifyKind::Name(RenameMode::Both))
+            | EventKind::Modify(ModifyKind::Name(RenameMode::From))
+            | EventKind::Modify(ModifyKind::Name(RenameMode::To))
+            | EventKind::Modify(ModifyKind::Name(RenameMode::Any))
+            | EventKind::Modify(ModifyKind::Name(RenameMode::Other))
+    ) && event.paths.len() >= 2
+    {
+        let mut domain_events = Vec::new();
+        if let Some(old_event) = classify_single_path_event(&event.paths[0], &EventKind::Remove(notify::event::RemoveKind::Any), root, wiki_dir) {
+            domain_events.push(old_event);
         }
-
-        // ── Arquivos raiz ────────────────────────────────────────────────
-        if path_equals(path, &expected_log) {
-            domain_events.push(WikiEvent::LogChanged);
-            continue;
+        if let Some(new_event) = classify_single_path_event(&event.paths[1], &EventKind::Create(notify::event::CreateKind::Any), root, wiki_dir) {
+            domain_events.push(new_event);
         }
-        if path_equals(path, &expected_index) {
-            domain_events.push(WikiEvent::IndexChanged);
-            continue;
-        }
-
-        // raw sources (sources/ e metadata/)
-        if path_is_in(path, &sources_dir) || path_is_in(path, &metadata_dir) {
-            if let Some(source_id) = extract_source_id(path, &sources_dir, &metadata_dir) {
-                let domain_event = match event.kind {
-                    EventKind::Create(_) | EventKind::Modify(_) => {
-                        WikiEvent::RawSourceUpdated { source_id }
-                    }
-                    EventKind::Remove(_) => WikiEvent::RawSourceDeleted { source_id },
-                    _ => WikiEvent::Unknown(format!(
-                        "Evento inesperado em raw source: {:?} → {}",
-                        event.kind,
-                        path.display()
-                    )),
-                };
-                domain_events.push(domain_event);
-            } else {
-                domain_events.push(WikiEvent::Unknown(format!(
-                    "Não foi possível extrair source_id de: {}",
-                    path.display()
-                )));
-            }
-            continue;
-        }
-
-        // outros dentro da wiki
-        if path_is_in(path, wiki_dir) {
-            domain_events.push(WikiEvent::Unknown(format!(
-                "Alteração não classificada dentro da wiki: {} ({:?})",
-                path.display(),
-                event.kind
-            )));
-        }
+        return domain_events;
     }
 
-    domain_events
+    event
+        .paths
+        .iter()
+        .filter_map(|path| classify_single_path_event(path, &event.kind, root, wiki_dir))
+        .collect()
 }
 
 /// Verifica se um caminho bruto pertence a um diretório, comparando
@@ -358,6 +373,7 @@ fn extract_slug(canonical_path: &Path, pages_dir: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notify::event::{CreateKind, RemoveKind};
 
 
 
@@ -529,5 +545,82 @@ mod tests {
         let path = PathBuf::from("/root/.advwiki/metadata/abc123");
         // Em metadata/, esperamos .json; sem extensão não extrai
         assert_eq!(extract_source_id(&path, &sources, &metadata), None);
+    }
+
+    #[test]
+    fn test_translate_event_page_rename_emits_delete_then_create() {
+        let root = PathBuf::from("/root");
+        let wiki_dir = root.join(".advwiki");
+        let event = Event {
+            kind: EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+            paths: vec![
+                wiki_dir.join("pages/old-page.md"),
+                wiki_dir.join("pages/new-page.md"),
+            ],
+            attrs: Default::default(),
+        };
+
+        let translated = translate_event(&event, &root, &wiki_dir);
+
+        assert_eq!(
+            translated,
+            vec![
+                WikiEvent::PageDeleted {
+                    slug: "old-page".into(),
+                },
+                WikiEvent::PageCreated {
+                    slug: "new-page".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_translate_event_raw_rename_emits_delete_then_create() {
+        let root = PathBuf::from("/root");
+        let wiki_dir = root.join(".advwiki");
+        let event = Event {
+            kind: EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+            paths: vec![
+                wiki_dir.join("sources/old-id"),
+                wiki_dir.join("sources/new-id"),
+            ],
+            attrs: Default::default(),
+        };
+
+        let translated = translate_event(&event, &root, &wiki_dir);
+
+        assert_eq!(
+            translated,
+            vec![
+                WikiEvent::RawSourceDeleted {
+                    source_id: "old-id".into(),
+                },
+                WikiEvent::RawSourceUpdated {
+                    source_id: "new-id".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_classify_single_path_event_preserves_regular_create_remove_behavior() {
+        let root = PathBuf::from("/root");
+        let wiki_dir = root.join(".advwiki");
+        let page_path = wiki_dir.join("pages/home.md");
+        let raw_path = wiki_dir.join("sources/abc123");
+
+        assert_eq!(
+            classify_single_path_event(&page_path, &EventKind::Create(CreateKind::Any), &root, &wiki_dir),
+            Some(WikiEvent::PageCreated {
+                slug: "home".into(),
+            })
+        );
+        assert_eq!(
+            classify_single_path_event(&raw_path, &EventKind::Remove(RemoveKind::Any), &root, &wiki_dir),
+            Some(WikiEvent::RawSourceDeleted {
+                source_id: "abc123".into(),
+            })
+        );
     }
 }

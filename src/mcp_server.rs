@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use crate::search::WikiSearchEngine;
+use crate::search::{DocumentKind, WikiSearchEngine};
 use crate::storage::WikiFileManager;
 
 // tipos JSON-RPC
@@ -642,15 +642,13 @@ impl AdvWikiMcpServer {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let mut results = self
-            .search_engine
-            .search(question, max_pages)
-            .map_err(|e| format!("Search error: {e}"))?;
-
-        // filtra raw sources se includeRawReferences for false
-        if !include_raw {
-            results.retain(|r| !r.uri.starts_with("raw://"));
+        let results = if include_raw {
+            self.search_engine.search(question, max_pages)
+        } else {
+            self.search_engine
+                .search_with_kind_filter(question, max_pages, Some(DocumentKind::Page))
         }
+        .map_err(|e| format!("Search error: {e}"))?;
 
         let mut lines = Vec::new();
         lines.push(format!("# Resultados para: \"{}\"\n", question));
@@ -948,6 +946,8 @@ impl AdvWikiMcpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::search::DocumentKind;
+    use tempfile::TempDir;
 
     #[test]
     fn test_json_rpc_response_success() {
@@ -1026,5 +1026,51 @@ mod tests {
 
         assert_eq!(a, b);
         assert_ne!(a, c);
+    }
+
+    #[tokio::test]
+    async fn test_tool_query_wiki_prefers_page_filter_before_top_k() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let file_manager = Arc::new(WikiFileManager::new(Some(root.clone())));
+        file_manager.init().await.unwrap();
+
+        let search_engine = Arc::new(WikiSearchEngine::new(root.join(".advwiki/index")).unwrap());
+
+        for i in 0..3 {
+            search_engine
+                .index_document(
+                    DocumentKind::Raw,
+                    &format!("raw://source/{i}"),
+                    &format!("raw-{i}"),
+                    "alpha alpha alpha alpha alpha",
+                    1000,
+                )
+                .unwrap();
+        }
+
+        search_engine
+            .index_document(
+                DocumentKind::Page,
+                "wiki://page/alpha",
+                "Alpha",
+                "alpha única página relevante",
+                1000,
+            )
+            .unwrap();
+
+        let server = AdvWikiMcpServer::new(file_manager, search_engine);
+        let response = server
+            .tool_query_wiki(&json!({
+                "question": "alpha",
+                "maxPages": 1,
+                "includeRawReferences": false
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(response.len(), 1);
+        assert!(response[0].text.contains("wiki://page/alpha"));
+        assert!(!response[0].text.contains("raw://source/"));
     }
 }

@@ -654,6 +654,12 @@ impl WikiFileManager {
         if slug.is_empty() {
             bail!("Slug não pode ser vazio");
         }
+        if slug.starts_with('.') || slug.ends_with('.') || slug.ends_with(' ') {
+            bail!(
+                "Slug '{}' não pode começar com ponto, terminar com ponto ou espaço",
+                slug
+            );
+        }
         if slug.contains("..")
             || slug.contains('/')
             || slug.contains('\\')
@@ -674,6 +680,37 @@ impl WikiFileManager {
                 slug
             );
         }
+
+        let upper = slug.to_ascii_uppercase();
+        let reserved = matches!(
+            upper.as_str(),
+            "CON"
+                | "PRN"
+                | "AUX"
+                | "NUL"
+                | "COM1"
+                | "COM2"
+                | "COM3"
+                | "COM4"
+                | "COM5"
+                | "COM6"
+                | "COM7"
+                | "COM8"
+                | "COM9"
+                | "LPT1"
+                | "LPT2"
+                | "LPT3"
+                | "LPT4"
+                | "LPT5"
+                | "LPT6"
+                | "LPT7"
+                | "LPT8"
+                | "LPT9"
+        );
+        if reserved {
+            bail!("Slug '{}' usa nome reservado do Windows", slug);
+        }
+
         Ok(())
     }
 }
@@ -772,6 +809,20 @@ mod tests {
     #[test]
     fn test_validate_slug_empty() {
         assert!(WikiFileManager::validate_slug("").is_err());
+    }
+
+    #[test]
+    fn test_validate_slug_invalid_windows_reserved_names() {
+        for slug in ["CON", "prn", "Aux", "nul", "COM1", "com9", "LPT1", "lpt9"] {
+            assert!(WikiFileManager::validate_slug(slug).is_err(), "slug should fail: {slug}");
+        }
+    }
+
+    #[test]
+    fn test_validate_slug_invalid_windows_edge_chars() {
+        assert!(WikiFileManager::validate_slug(".hidden").is_err());
+        assert!(WikiFileManager::validate_slug("trailing.").is_err());
+        assert!(WikiFileManager::validate_slug("trailing ").is_err());
     }
 
     #[test]

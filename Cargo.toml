@@ -2,6 +2,12 @@
 name = "mcp-advwiki"
 version = "0.1.0"
 edition = "2024"
+description = "A local wiki with BM25 search, made for AIs and MCP clients. Good for microservice architecture documentation and knowledge bases."
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/dfalci/mcp-advwiki"
+repository = "https://github.com/dfalci/mcp-advwiki"
+authors = ["Daniel Falci <danielfalci@gmail.com>"]
 
 [dependencies]
 anyhow = "1.0.102"
@@ -19,3 +25,8 @@ walkdir = "2.5.0"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
