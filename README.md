@@ -257,19 +257,18 @@ The URIs are accessible both as **resources** (passive reading) and via **tools*
 
 ## Available tools
 
-The AI has access to these MCP tools:
+The AI has access to these MCP tools (names match what `tools/list` returns):
 
-- **search_advwiki** - full-text search with BM25. Takes `query` and `limit`.
-- **read_advwiki_page** - reads a page by its slug.
-- **write_advwiki_page** - creates or updates a page.
-- **delete_advwiki_page** - removes a page.
-- **list_advwiki_pages** - lists all slugs.
-- **read_knowledge_uri** - reads any logical URI in the system.
-- **fetch_url_to_rawsource** - downloads external content and indexes it as a raw source.
-- **validate_advwiki_index** - checks consistency between disk and index.
-- **read_advwiki_log** - reads the operational log.
-- **read_raw_source** / **read_raw_source_metadata** - access to raw sources.
-- **read_rawindex** - reads the raw sources index.
+- **query_wiki** — full-text BM25 search. Args: `question` (required), `maxPages` (1–50, default 10), `includeRawReferences` (bool, default false; when false only wiki pages are returned).
+- **update_page** — creates or updates a page. Args: `slug`, `mode` (`overwrite` | `append`), `content`; optional `rationale` is appended to the operational log.
+- **delete_page** — removes a page by `slug`; optional `rationale` is logged.
+- **ingest_source** — downloads external content (HTTP/HTTPS or local file path) and stores it as a raw source. Args: `sourceUri`, `sourceType`, optional `force` (default false). The `source_id` is a stable MD5 of `sourceUri`.
+- **ingest_extracted_content** — saves already-extracted text as a raw source. Args: `logicalUri` (must be `raw://source/<id>`), `sourceType`, `title`, `content`, optional `force`.
+- **delete_raw_source** — removes a raw source (content + metadata) and updates `rawindex.md`. Args: `sourceId`; optional `rationale` is logged.
+- **lint_wiki** — structural validation report. Args: `scope` (`all` | `quick`).
+- **read_knowledge_uri** — reads any logical URI (`wiki://page/{slug}`, `wiki://log`, `wiki://index`, `wiki://rawindex`, `raw://source/{id}`, `raw://sourcemetadata/{id}`). Args: `uri`.
+
+Passive reads (page list, log, raw sources, metadata) are also available through MCP **resources** via `resources/list` and `resources/read` — no tool call required for plain reads.
 
 ---
 

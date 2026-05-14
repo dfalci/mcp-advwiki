@@ -350,18 +350,17 @@ impl WikiFileManager {
             .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
             .filter_map(|line| {
                 let parts: Vec<&str> = line.splitn(3, '|').collect();
-                if parts.len() >= 1 {
-                    let source_id = parts[0].trim().to_string();
-                    let original_path = parts.get(1).map(|s| s.trim().to_string());
-                    let extracted_at = parts.get(2).map(|s| s.trim().to_string());
-                    Some(RawIndexEntry {
-                        source_id,
-                        original_path: original_path.filter(|s| !s.is_empty()),
-                        extracted_at: extracted_at.unwrap_or_default(),
-                    })
-                } else {
-                    None
+                let source_id = parts.first()?.trim().to_string();
+                if source_id.is_empty() {
+                    return None;
                 }
+                let original_path = parts.get(1).map(|s| s.trim().to_string());
+                let extracted_at = parts.get(2).map(|s| s.trim().to_string());
+                Some(RawIndexEntry {
+                    source_id,
+                    original_path: original_path.filter(|s| !s.is_empty() && s != "-"),
+                    extracted_at: extracted_at.unwrap_or_default(),
+                })
             })
             .collect();
 
@@ -579,7 +578,6 @@ impl WikiFileManager {
     }
 
     /// Exclui uma página da wiki pelo slug.
-    #[allow(dead_code)]
     pub async fn delete_page(&self, slug: &str) -> anyhow::Result<()> {
         Self::validate_slug(slug)?;
         let path = self.wiki_dir.join("pages").join(format!("{slug}.md"));
@@ -594,7 +592,6 @@ impl WikiFileManager {
     }
 
     /// Exclui uma raw source e seus metadados.
-    #[allow(dead_code)]
     pub async fn delete_raw_source(&self, source_id: &str) -> anyhow::Result<()> {
         Self::validate_slug(source_id)?;
 
@@ -624,7 +621,6 @@ impl WikiFileManager {
             .context("Falha ao excluir raw source ou metadados")?;
 
         // Remove a entrada do rawindex.md
-        self.upsert_raw_index_entry(source_id, &None, "").await?;
         let path = self.root.join("rawindex.md");
         let mut entries = self.read_raw_index().await.unwrap_or_default();
         entries.retain(|e| e.source_id != source_id);

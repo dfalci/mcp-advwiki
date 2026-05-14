@@ -79,20 +79,17 @@ impl WikiWatcher {
     /// Inicia o monitoramento e retorna o receiver + o watcher.
     ///
     /// - `root`: diretório raiz do projeto (contém `.advwikilog.md` e `rawindex.md`).
-    /// - `wiki_dir`: diretório `.advwiki/` (contém `pages/`, `sources/`, `metadata/`).
     ///
     /// O watcher monitora:
     /// - `.advwiki/` recursivamente (cobre `pages/`, `sources/`, `metadata/`)
     /// - Arquivos na raiz: `.advwikilog.md`, `rawindex.md`
     pub fn start(
         root: PathBuf,
-        wiki_dir: PathBuf,
     ) -> anyhow::Result<(tokio_mpsc::UnboundedReceiver<WikiEvent>, Self)> {
-        // Canonicaliza o root e derivamos wiki_dir antes de qualquer
+        // Canonicaliza o root e deriva o wiki_dir antes de qualquer
         // operação, garantindo que `watcher.watch()` e a `bg_task` usem
         // os mesmos prefixos. Se `notify` emitir paths com prefixo
         // diferente, as comparações `starts_with` falhariam silenciosamente.
-        let _ = wiki_dir; // consumimos o parâmetro para evitar warning
         let root = std::fs::canonicalize(&root)
             .context("Falha ao canonicalizar o diretório raiz da Wiki")?;
         let wiki_dir = root.join(".advwiki");

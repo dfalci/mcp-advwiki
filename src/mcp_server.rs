@@ -124,7 +124,7 @@ struct McpToolContent {
 // negociação de Protocolo
 
 /// versões de protocolo mcp suportadas, em ordem de preferência (mais recente primeiro).
-const SUPPORTED_PROTOCOLS: &[&str] = &["2025-11-25", "2025-06-18", "2024-11-05"];
+const SUPPORTED_PROTOCOLS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
 /// negocia a versão do protocolo mcp com o cliente.
 ///
@@ -287,7 +287,7 @@ impl AdvWikiMcpServer {
             }),
             serverInfo: json!({
                 "name": "advwiki-mcp",
-                "version": "0.1.0"
+                "version": env!("CARGO_PKG_VERSION")
             }),
         };
 
@@ -570,6 +570,42 @@ impl AdvWikiMcpServer {
                     "required": ["uri"]
                 }),
             },
+            McpTool {
+                name: "delete_page".into(),
+                description: Some("Remove uma página da Wiki pelo slug.".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {
+                        "slug": {
+                            "type": "string",
+                            "description": "Slug da página a ser removida"
+                        },
+                        "rationale": {
+                            "type": "string",
+                            "description": "Justificativa da remoção (registrada no log operacional)"
+                        }
+                    },
+                    "required": ["slug"]
+                }),
+            },
+            McpTool {
+                name: "delete_raw_source".into(),
+                description: Some("Remove uma raw source (conteúdo bruto + metadados) e atualiza o rawindex.".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {
+                        "sourceId": {
+                            "type": "string",
+                            "description": "Identificador da raw source a ser removida"
+                        },
+                        "rationale": {
+                            "type": "string",
+                            "description": "Justificativa da remoção (registrada no log operacional)"
+                        }
+                    },
+                    "required": ["sourceId"]
+                }),
+            },
         ];
 
         JsonRpcResponse::success(
@@ -607,6 +643,8 @@ impl AdvWikiMcpServer {
             "ingest_extracted_content" => self.tool_ingest_extracted(&arguments).await,
             "lint_wiki" => self.tool_lint_wiki(&arguments).await,
             "read_knowledge_uri" => self.tool_read_knowledge_uri(&arguments).await,
+            "delete_page" => self.tool_delete_page(&arguments).await,
+            "delete_raw_source" => self.tool_delete_raw_source(&arguments).await,
             _ => Err(format!("Tool not found: {name}")),
         };
 
@@ -808,10 +846,12 @@ impl AdvWikiMcpServer {
             .and_then(|v| v.as_str())
             .ok_or("Missing required arg: content")?;
 
-        // Extrai source_id da logicalUri
+        // Extrai source_id da logicalUri (precisa ter o prefixo raw://source/)
         let source_id = logical_uri
             .strip_prefix("raw://source/")
-            .unwrap_or(logical_uri)
+            .ok_or_else(|| format!(
+                "logicalUri inválida: '{logical_uri}'. Esperado formato 'raw://source/<id>'."
+            ))?
             .to_string();
 
         // Verifica force — protege contra sobrescrita acidental
@@ -921,6 +961,56 @@ impl AdvWikiMcpServer {
         Ok(vec![McpToolContent {
             content_type: "text".into(),
             text: report.join("\n"),
+        }])
+    }
+
+    // tool - delete_page
+    async fn tool_delete_page(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
+        let slug = args
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing required arg: slug")?;
+
+        let rationale = args.get("rationale").and_then(|v| v.as_str());
+
+        self.file_manager
+            .delete_page(slug)
+            .await
+            .map_err(|e| format!("Delete error: {e}"))?;
+
+        if let Some(reason) = rationale {
+            let log_entry = format!("[delete_page] `{slug}`: {reason}");
+            let _ = self.file_manager.append_to_log(&log_entry).await;
+        }
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text: format!("Página `{slug}` removida."),
+        }])
+    }
+
+    // tool - delete_raw_source
+    async fn tool_delete_raw_source(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
+        let source_id = args
+            .get("sourceId")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing required arg: sourceId")?;
+
+        let rationale = args.get("rationale").and_then(|v| v.as_str());
+
+        self.file_manager
+            .delete_raw_source(source_id)
+            .await
+            .map_err(|e| format!("Delete error: {e}"))?;
+
+        if let Some(reason) = rationale {
+            let log_entry = format!("[delete_raw_source] `{source_id}`: {reason}");
+            let _ = self.file_manager.append_to_log(&log_entry).await;
+        }
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text: format!("Raw source `{source_id}` removida."),
         }])
     }
 

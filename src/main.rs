@@ -165,7 +165,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     //inicializa o file watcher
     let (mut event_rx, _watcher) = watcher::WikiWatcher::start(
         wiki.root().to_path_buf(),
-        wiki.wiki_dir().to_path_buf(),
     )?;
     tracing::info!("File watcher iniciado");
 

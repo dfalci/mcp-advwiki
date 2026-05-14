@@ -1,6 +1,6 @@
 [package]
 name = "mcp-advwiki"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 description = "A local wiki with BM25 search, made for AIs and MCP clients. Good for microservice architecture documentation and knowledge bases."
 license = "MIT"
