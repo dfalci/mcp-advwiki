@@ -6,7 +6,9 @@ The core idea is to evolve from a searchable wiki into a **living knowledge base
 
 ---
 
-## 1. Create a navigable wiki `index.md`
+## ~~1. Create a navigable wiki `index.md`~~ ✅ Implemented
+
+> **Status:** Implemented — the `rebuild_wiki_index` tool generates the `wiki://page/index` page, grouping pages by type and project based on the frontmatter.
 
 ### Goal
 
@@ -81,7 +83,9 @@ This item should come before more sophisticated features, because it immediately
 
 ---
 
-## 2. Add YAML frontmatter to pages
+## ~~2. Add YAML frontmatter to pages~~ ✅ Implemented
+
+> **Status:** Implemented — YAML frontmatter module (`type`, `project`, `status`, `created_at`, `updated_at`, `confidence`, `sources`, `related`, `tags`, `owner`) with parsing and automatic date updates, plus the `list_pages_by_type`, `list_pages_by_project`, `list_pages_by_tag`, and `find_pages_without_sources` tools. (`find_stale_pages` does not have a dedicated tool yet; stale page detection currently lives inside `lint_wiki`.)
 
 ### Goal
 
@@ -161,7 +165,9 @@ Frontmatter is a foundation. The earlier it is adopted, the lower the future mig
 
 ---
 
-## 3. Strengthen `lint_wiki`
+## ~~3. Strengthen `lint_wiki`~~ ✅ Implemented
+
+> **Status:** Implemented — `lint_wiki` with `quick` and `all` scopes detects broken links, orphan pages, missing frontmatter, raw sources without a derived page, stale pages, decisions without rationale, and duplicate/similar pages. More advanced `full`-scope checks (contradictions, recurring concepts without their own page, overly large pages, stale due to code changes) are still pending.
 
 ### Goal
 
@@ -796,9 +802,9 @@ This could become one of the most interesting features in the project, especiall
 
 ## Phase 1 — Wiki foundation
 
-1. Create navigable `index.md`.
-2. Add YAML frontmatter.
-3. Improve `lint_wiki` for links, orphans, and metadata.
+1. ~~Create navigable `index.md`.~~ ✅
+2. ~~Add YAML frontmatter.~~ ✅
+3. ~~Improve `lint_wiki` for links, orphans, and metadata.~~ ✅
 4. Create basic backlinks/graph.
 
 ## Phase 2 — Safer writing
