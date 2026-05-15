@@ -28,6 +28,12 @@ Antes de raciocinar sobre qualquer microsserviço, componente, repositório ou d
 | `update_page` | Criar ou atualizar uma página quando o usuário pedir registro curado |
 | `ingest_extracted_content` | Salvar conteúdo bruto ou semi-bruto extraído de logs, specs, trechos de código ou mensagens |
 | `lint_wiki` | Verificar consistência do índice ou integridade da wiki, raramente e sob pedido |
+| `read_knowledge_uri` | Ler qualquer URI da wiki diretamente (`wiki://page/{slug}`, `wiki://log`, etc.) |
+| `list_pages_by_type` | Listar todas as páginas de um determinado tipo (ex: todas as `decision` ou `service`) |
+| `list_pages_by_project` | Listar todas as páginas de um determinado projeto |
+| `list_pages_by_tag` | Listar todas as páginas com uma tag específica |
+| `find_pages_without_sources` | Identificar páginas sem raw sources vinculadas — candidatas a revisão ou linkagem |
+| `rebuild_wiki_index` | Regenerar `wiki://page/index` após mudanças em massa ou reorganizações |
 | `resources/list` | Listar páginas existentes quando o usuário quiser navegar ou localizar páginas |
 | `resources/read` | Ler uma página específica pelo URI |
 
@@ -39,16 +45,20 @@ Quando esta skill for ativada e houver um projeto, repositório, serviço ou mó
 
 Ordem preferencial:
 
-1. Se existir ou puder ser inferida uma página raiz conhecida do projeto:
+1. Se a wiki tiver uma página de índice estruturada:
+   - ler `wiki://page/index` para ter uma visão geral de todas as páginas agrupadas por tipo e projeto;
+   - usar esse mapa para entender o escopo da wiki e localizar páginas relevantes antes de responder.
+
+2. Se existir ou puder ser inferida uma página raiz conhecida do projeto:
    - ler `wiki://page/{projeto}`;
    - usar essa página apenas para entender a estrutura da documentação, os módulos existentes e os links relevantes.
 
-2. Se a página raiz não for conhecida:
+3. Se a página raiz não for conhecida:
    - chamar `query_wiki` com o nome do projeto, serviço ou componente;
    - usar `maxPages: 3`;
    - usar `includeRawReferences: false`, salvo se a pergunta exigir rastreabilidade detalhada.
 
-3. Se nenhum projeto, serviço ou componente estiver claro:
+4. Se nenhum projeto, serviço ou componente estiver claro:
    - não consultar índice global;
    - aguardar o primeiro nome concreto de projeto, serviço, repositório, módulo ou componente.
 
@@ -258,9 +268,21 @@ Exemplos de `rationale`:
 Ao criar uma página nova, seguir esta estrutura, adaptando as seções ao caso concreto:
 
 ```markdown
+---
+type: {service|decision|pattern|runbook|bug|note}
+project: {nome-do-projeto}
+status: {active|draft|accepted|deprecated}
+tags:
+  - {tag1}
+sources:
+  - raw://source/{source-id}
+related:
+  - {outro-slug}
+---
+
 # {Título da Página}
 
-> Última atualização: {data} | Contexto: {sessão, ticket, PR ou investigação}
+> Contexto: {sessão, ticket, PR ou investigação}
 
 ## Sumário
 Uma frase descrevendo o que esta página documenta.
@@ -297,7 +319,8 @@ Além de criar ou atualizar a página alvo, Claude deve manter a wiki fácil de 
 
 ### Regra do índice raiz
 
-- Sempre que novas páginas relevantes forem criadas para um projeto ou módulo, Claude deve sugerir ou executar, se isso fizer parte do pedido do usuário, a atualização da página raiz correspondente.
+- A wiki tem um índice global estruturado em `wiki://page/index`, gerado por `rebuild_wiki_index`. Ele agrupa todas as páginas por `type` e `project` automaticamente. Chamar `rebuild_wiki_index` após importações em massa, reorganizações ou quando o usuário pedir para "reconstruir o índice" ou "atualizar a navegação".
+- Além do índice global, cada projeto pode ter sua própria página raiz. Sempre que novas páginas relevantes forem criadas para um projeto ou módulo, Claude deve sugerir ou executar, se isso fizer parte do pedido do usuário, a atualização da página raiz correspondente.
 - Exemplo: `wiki://page/omnisiga`, `wiki://page/apolo`, `wiki://page/matchb2g`.
 - A página raiz deve funcionar como **hub de navegação**, com agrupamento intuitivo por módulo, domínio ou tema arquitetural.
 - Evitar listas soltas e genéricas; preferir seções como `Botengine`, `Integrações`, `Decisões transversais`, `Deploy`, `Banco de Dados`, `Fluxos`, `Bugs conhecidos`.
