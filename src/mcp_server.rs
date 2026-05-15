@@ -906,61 +906,13 @@ impl AdvWikiMcpServer {
             .and_then(|v| v.as_str())
             .ok_or("Missing required arg: scope")?;
 
-        let mut report = Vec::new();
-        report.push(format!("# Relatório de Validação (scope: {scope})\n"));
-
-        // conta as paginas
-        let pages = self
-            .file_manager
-            .list_pages()
+        let report = crate::lint::run_lint(scope, &self.file_manager, &self.search_engine)
             .await
             .map_err(|e| format!("Lint error: {e}"))?;
-
-        report.push(format!("- Páginas encontradas: {}", pages.len()));
-
-        // conta raw resources
-        let sources = self
-            .file_manager
-            .list_raw_sources()
-            .await
-            .map_err(|e| format!("Lint error: {e}"))?;
-
-        report.push(format!("- Raw sources: {}", sources.len()));
-
-        // conta documentos no índice
-        let doc_count = self
-            .search_engine
-            .doc_count()
-            .map_err(|e| format!("Lint error: {e}"))?;
-
-        report.push(format!("- Documentos no índice: {doc_count}"));
-
-        // verifica a consistência (paginas + raw sources vs indice)
-        let expected_count = (pages.len() + sources.len()) as u64;
-        if expected_count != doc_count {
-            report.push(format!(
-                "- warn - Inconsistência: {} documentos no disco ({} páginas + {} sources) vs {} no índice",
-                expected_count,
-                pages.len(),
-                sources.len(),
-                doc_count
-            ));
-        } else {
-            report.push("- ok - Índice consistente com o disco".to_string());
-        }
-
-        report.push("\n## Paginas\n".into());
-        if pages.is_empty() {
-            report.push("(nenhuma)".into());
-        } else {
-            for slug in &pages {
-                report.push(format!("- `{slug}`"));
-            }
-        }
 
         Ok(vec![McpToolContent {
             content_type: "text".into(),
-            text: report.join("\n"),
+            text: report.format_markdown(),
         }])
     }
 

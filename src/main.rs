@@ -1,3 +1,4 @@
+mod lint;
 mod mcp_server;
 mod search;
 mod storage;
