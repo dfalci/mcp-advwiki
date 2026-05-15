@@ -6,7 +6,9 @@ A ideia central é evoluir de uma wiki pesquisável para uma **base de conhecime
 
 ---
 
-## 1. Criar um `index.md` navegável da wiki
+## ~~1. Criar um `index.md` navegável da wiki~~ ✅ Implementado
+
+> **Status:** Implementado — a tool `rebuild_wiki_index` gera a página `wiki://page/index`, agrupando as páginas por tipo e projeto a partir do frontmatter.
 
 ### Objetivo
 
@@ -81,7 +83,9 @@ Este item deve vir antes de recursos mais sofisticados, porque melhora imediatam
 
 ---
 
-## 2. Adicionar YAML frontmatter às páginas
+## ~~2. Adicionar YAML frontmatter às páginas~~ ✅ Implementado
+
+> **Status:** Implementado — módulo de frontmatter YAML (`type`, `project`, `status`, `created_at`, `updated_at`, `confidence`, `sources`, `related`, `tags`, `owner`) com parsing e atualização automática de datas, além das tools `list_pages_by_type`, `list_pages_by_project`, `list_pages_by_tag` e `find_pages_without_sources`. (`find_stale_pages` ainda não tem tool dedicada; a detecção de páginas stale vive hoje dentro do `lint_wiki`.)
 
 ### Objetivo
 
@@ -161,7 +165,9 @@ O frontmatter é uma fundação. Quanto antes for adotado, menor o custo de migr
 
 ---
 
-## 3. Fortalecer `lint_wiki`
+## ~~3. Fortalecer `lint_wiki`~~ ✅ Implementado
+
+> **Status:** Implementado — `lint_wiki` com escopos `quick` e `all` detecta links quebrados, páginas órfãs, frontmatter ausente, raw sources sem página derivada, páginas stale, decisões sem rationale e páginas duplicadas/similares. Checagens mais avançadas do escopo `full` (contradições, conceitos recorrentes sem página própria, páginas muito grandes, stale por mudança de código) ainda ficam pendentes.
 
 ### Objetivo
 
@@ -796,9 +802,9 @@ Pode virar um dos recursos mais interessantes do projeto, especialmente para uso
 
 ## Fase 1 — Fundação da wiki
 
-1. Criar `index.md` navegável.
-2. Adicionar YAML frontmatter.
-3. Melhorar `lint_wiki` para links, órfãos e metadados.
+1. ~~Criar `index.md` navegável.~~ ✅
+2. ~~Adicionar YAML frontmatter.~~ ✅
+3. ~~Melhorar `lint_wiki` para links, órfãos e metadados.~~ ✅
 4. Criar backlinks/grafo básico.
 
 ## Fase 2 — Escrita mais segura
