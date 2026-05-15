@@ -203,6 +203,7 @@ fn classify_single_path_event(
     let pages_dir = wiki_dir.join("pages");
     let sources_dir = wiki_dir.join("sources");
     let metadata_dir = wiki_dir.join("metadata");
+    let proposals_dir = wiki_dir.join("proposals");
     let expected_log = root.join(".advwikilog.md");
     let expected_index = root.join("rawindex.md");
 
@@ -244,6 +245,11 @@ fn classify_single_path_event(
                 path.display()
             )),
         });
+    }
+
+    // Propostas de alteração não são indexáveis — ignoramos seus eventos.
+    if path_is_in(path, &proposals_dir) {
+        return None;
     }
 
     if path_is_in(path, wiki_dir) {

@@ -7,11 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Change planning with diff before writing** (`change_plan` module),
+  covering roadmap item 5:
+  - `propose_page_update`: stores a reviewable change proposal under
+    `.advwiki/proposals/<id>.json` and returns a unified diff between the
+    current and proposed page content, without writing the page.
+  - `apply_page_update`: applies a proposal by id, re-checking via an MD5
+    hash that the page has not changed since the proposal (overridable with
+    `force`), then writes the page and records the operation in the log.
+
 ### Changed
 
-- Marked roadmap items 1-3 as implemented in `roadmap.md` and `roadmap-pt.md`
-  (navigable `index.md`, YAML frontmatter, and a strengthened `lint_wiki`),
-  with a per-item status note describing the delivered tools and remaining gaps.
+- Marked roadmap items 1-3 and 5 as implemented in `roadmap.md` and
+  `roadmap-pt.md`, with a per-item status note describing the delivered
+  tools and remaining gaps.
 
 ## [0.1.6] - 2026-05-15
 

@@ -308,7 +308,9 @@ This should come after `index.md` and frontmatter, because it depends on a minim
 
 ---
 
-## 5. Introduce change planning and diff before writing
+## ~~5. Introduce change planning and diff before writing~~ ✅ Implemented
+
+> **Status:** Implemented — `propose_page_update` stores a reviewable proposal in `.advwiki/proposals/<id>.json` and returns a unified diff; `apply_page_update` applies it by id, guarding against a changed base via an MD5 hash check (overridable with `force`). The change model is full proposed content + diff; structured section-level patches remain a possible future evolution.
 
 ### Goal
 
@@ -809,7 +811,7 @@ This could become one of the most interesting features in the project, especiall
 
 ## Phase 2 — Safer writing
 
-5. Create change plan + diff.
+5. ~~Create change plan + diff.~~ ✅
 6. Create semantic domain tools.
 7. Create curated ingestion flow.
 

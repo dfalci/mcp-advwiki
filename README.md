@@ -144,7 +144,7 @@ confidence: high
 Your content here.
 ```
 
-The server manages `updated_at` and `created_at` automatically: every time you call `update_page`, `updated_at` is injected or refreshed (format `YYYY-MM-DD`). `created_at` is only written once, on the first save.
+The server manages `updated_at` and `created_at` automatically: every time you call `update_page` (or `propose_page_update`), `updated_at` is injected or refreshed (format `YYYY-MM-DD`). `created_at` is only written once, on the first save.
 
 Pages without a frontmatter block are fully supported — the fields are all optional. The frontmatter is stripped before indexing, so BM25 search sees only the actual Markdown content.
 
@@ -199,6 +199,7 @@ The `storage.rs` module manages the directory structure in `.advwiki/` under the
   pages/        - your Markdown pages ({slug}.md)
   sources/      - indexed raw content
   metadata/     - JSON metadata for each raw source
+  proposals/    - pending/applied change proposals ({proposal_id}.json)
   index/        - Tantivy index (managed automatically)
 ```
 
@@ -307,6 +308,8 @@ The AI has access to these MCP tools (names match what `tools/list` returns):
 
 - **query_wiki** — full-text BM25 search. Args: `question` (required), `maxPages` (1–50, default 10), `includeRawReferences` (bool, default false; when false only wiki pages are returned).
 - **update_page** — creates or updates a page. Args: `slug`, `mode` (`overwrite` | `append`), `content`; optional `rationale` is appended to the operational log.
+- **propose_page_update** — proposes a page change *without writing it*. Stores a reviewable proposal under `.advwiki/proposals/<id>.json` and returns a unified diff between the current and proposed content. Args: `slug`, `content` (the full proposed Markdown), `reason`. Returns a `proposal_id` to be used with `apply_page_update`.
+- **apply_page_update** — applies a proposal created by `propose_page_update`. Args: `proposalId`, optional `force` (default false). Before writing, it re-checks via an MD5 hash that the page has not changed since the proposal; on a mismatch it refuses unless `force` is set. The operation is recorded in the operational log.
 - **delete_page** — removes a page by `slug`; optional `rationale` is logged.
 - **ingest_source** — downloads external content (HTTP/HTTPS or local file path) and stores it as a raw source. Args: `sourceUri`, `sourceType`, optional `force` (default false). The `source_id` is a stable MD5 of `sourceUri`.
 - **ingest_extracted_content** — saves already-extracted text as a raw source. Args: `logicalUri` (must be `raw://source/<id>`), `sourceType`, `title`, `content`, optional `force`.
