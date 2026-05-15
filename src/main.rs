@@ -1,3 +1,4 @@
+mod frontmatter;
 mod lint;
 mod mcp_server;
 mod search;
@@ -262,10 +263,10 @@ async fn handle_wiki_event(
             let uri = format!("wiki://page/{slug}");
             match wiki.read_page(&slug).await {
                 Ok(content) => {
-                    // o título é o slug com hífens substituídos por espaços
                     let title = slug.replace('-', " ");
                     let now = chrono::Utc::now().timestamp();
-                    if let Err(e) = engine.index_document(search::DocumentKind::Page, &uri, &title, &content, now) {
+                    let indexed_content = frontmatter::strip_frontmatter(&content);
+                    if let Err(e) = engine.index_document(search::DocumentKind::Page, &uri, &title, indexed_content, now) {
                         tracing::error!(%slug, error = %e, "Falha ao indexar página");
                     } else {
                         tracing::debug!(%slug, "Página indexada");
@@ -346,7 +347,8 @@ async fn rebuild_index(
                     Ok(content) => {
                         let uri = format!("wiki://page/{slug}");
                         let title = slug.replace('-', " ");
-                        docs.push((search::DocumentKind::Page, uri, title, content, now));
+                        let indexed_content = frontmatter::strip_frontmatter(&content).to_string();
+                        docs.push((search::DocumentKind::Page, uri, title, indexed_content, now));
                     }
                     Err(e) => {
                         tracing::warn!(%slug, error = %e, "Falha ao ler página durante rebuild");

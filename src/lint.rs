@@ -9,6 +9,7 @@
 //     - links quebrados (wiki://page/slug apontando para página inexistente)
 //     - páginas órfãs (nenhuma outra página as referencia)
 //     - raw sources sem página derivada (source_id não citado em nenhuma página)
+//     - páginas sem frontmatter YAML
 //     - páginas grandes (acima de LARGE_PAGE_THRESHOLD_BYTES)
 //     - páginas sem seção "Veja também" / "See also"
 //
@@ -68,6 +69,7 @@ pub struct LintReport {
     pub orphan_pages: Vec<String>,
     pub raw_without_pages: Vec<String>,
     // avisos de qualidade
+    pub missing_frontmatter: Vec<String>,
     pub large_pages: Vec<LargePage>,
     pub missing_see_also: Vec<String>,
     // scope "all" apenas
@@ -128,6 +130,14 @@ impl LintReport {
             &self.raw_without_pages,
             |id| format!("- `{id}`"),
             "_Todas as raw sources têm pelo menos uma página referenciando-as._",
+        );
+
+        format_section(
+            &mut lines,
+            "## Páginas sem Frontmatter",
+            &self.missing_frontmatter,
+            |slug| format!("- `{slug}`"),
+            "_Todas as páginas têm frontmatter._",
         );
 
         format_section(
@@ -304,6 +314,14 @@ pub async fn run_lint(
         .collect();
     large_pages.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
 
+    // páginas sem frontmatter
+    let mut missing_frontmatter: Vec<String> = page_contents
+        .iter()
+        .filter(|(_, content)| crate::frontmatter::parse_frontmatter(content).is_none())
+        .map(|(slug, _)| slug.clone())
+        .collect();
+    missing_frontmatter.sort();
+
     // páginas sem "Veja também"
     let mut missing_see_also: Vec<String> = page_contents
         .iter()
@@ -336,6 +354,7 @@ pub async fn run_lint(
         broken_links,
         orphan_pages,
         raw_without_pages,
+        missing_frontmatter,
         large_pages,
         missing_see_also,
         stale_pages,
@@ -897,6 +916,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_lint_detects_missing_frontmatter() {
+        let dir = TempDir::new().unwrap();
+        let fm = make_manager(dir.path().to_path_buf()).await;
+        let engine = make_engine(dir.path());
+
+        fm.write_page("no-fm", "# Sem frontmatter\n\nConteúdo.").await.unwrap();
+        fm.write_page("has-fm", "---\ntype: note\n---\n\n# Com frontmatter").await.unwrap();
+
+        let report = run_lint("quick", &fm, &engine).await.unwrap();
+        assert!(report.missing_frontmatter.contains(&"no-fm".to_string()));
+        assert!(!report.missing_frontmatter.contains(&"has-fm".to_string()));
+    }
+
+    #[tokio::test]
     async fn test_lint_index_consistency_detected() {
         let dir = TempDir::new().unwrap();
         let fm = make_manager(dir.path().to_path_buf()).await;
@@ -989,6 +1022,7 @@ mod tests {
         assert!(md.contains("## Links Quebrados"));
         assert!(md.contains("## Páginas Órfãs"));
         assert!(md.contains("## Raw Sources sem Página Derivada"));
+        assert!(md.contains("## Páginas sem Frontmatter"));
         assert!(md.contains("## Páginas Grandes"));
         assert!(md.contains("## Páginas sem \"Veja também\""));
         assert!(md.contains("## Páginas Desatualizadas"));

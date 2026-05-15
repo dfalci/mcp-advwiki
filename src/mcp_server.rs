@@ -606,6 +606,64 @@ impl AdvWikiMcpServer {
                     "required": ["sourceId"]
                 }),
             },
+            McpTool {
+                name: "list_pages_by_type".into(),
+                description: Some("Lista páginas da Wiki que têm o campo 'type' do frontmatter igual ao valor informado.".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {
+                        "pageType": {
+                            "type": "string",
+                            "description": "Valor do campo 'type' a filtrar (ex: 'service', 'decision', 'pattern', 'bug', 'runbook')"
+                        }
+                    },
+                    "required": ["pageType"]
+                }),
+            },
+            McpTool {
+                name: "list_pages_by_project".into(),
+                description: Some("Lista páginas da Wiki que têm o campo 'project' do frontmatter igual ao valor informado.".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {
+                        "project": {
+                            "type": "string",
+                            "description": "Nome do projeto a filtrar (ex: 'auth-service', 'gateway')"
+                        }
+                    },
+                    "required": ["project"]
+                }),
+            },
+            McpTool {
+                name: "list_pages_by_tag".into(),
+                description: Some("Lista páginas da Wiki que contêm a tag informada no frontmatter.".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {
+                        "tag": {
+                            "type": "string",
+                            "description": "Tag a filtrar (ex: 'backend', 'api', 'mcp')"
+                        }
+                    },
+                    "required": ["tag"]
+                }),
+            },
+            McpTool {
+                name: "find_pages_without_sources".into(),
+                description: Some("Lista páginas da Wiki sem campo 'sources' no frontmatter (ou com sources vazio) — candidatas a revisão ou linkagem com raw sources.".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
+            McpTool {
+                name: "rebuild_wiki_index".into(),
+                description: Some("Reconstrói a página de índice navegável da Wiki (wiki://page/index), agrupando todas as páginas por tipo e projeto conforme o frontmatter.".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
         ];
 
         JsonRpcResponse::success(
@@ -645,6 +703,11 @@ impl AdvWikiMcpServer {
             "read_knowledge_uri" => self.tool_read_knowledge_uri(&arguments).await,
             "delete_page" => self.tool_delete_page(&arguments).await,
             "delete_raw_source" => self.tool_delete_raw_source(&arguments).await,
+            "list_pages_by_type" => self.tool_list_pages_by_type(&arguments).await,
+            "list_pages_by_project" => self.tool_list_pages_by_project(&arguments).await,
+            "list_pages_by_tag" => self.tool_list_pages_by_tag(&arguments).await,
+            "find_pages_without_sources" => self.tool_find_pages_without_sources(&arguments).await,
+            "rebuild_wiki_index" => self.tool_rebuild_wiki_index(&arguments).await,
             _ => Err(format!("Tool not found: {name}")),
         };
 
@@ -733,17 +796,22 @@ impl AdvWikiMcpServer {
             .get("rationale")
             .and_then(|v| v.as_str());
 
-        let final_content = match mode {
-            "overwrite" => content.to_string(),
+        let (raw_content, is_new_page) = match mode {
+            "overwrite" => {
+                let is_new = self.file_manager.read_page(slug).await.is_err();
+                (content.to_string(), is_new)
+            }
             "append" => {
-                // Lê conteúdo existente e concatena
                 match self.file_manager.read_page(slug).await {
-                    Ok(existing) => format!("{existing}\n\n{content}"),
-                    Err(_) => content.to_string(),
+                    Ok(existing) => (format!("{existing}\n\n{content}"), false),
+                    Err(_) => (content.to_string(), true),
                 }
             }
             _ => return Err(format!("Invalid mode: {mode}. Use 'overwrite' or 'append'")),
         };
+
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let final_content = crate::frontmatter::update_date_fields(&raw_content, &today, is_new_page);
 
         self.file_manager
             .write_page(slug, &final_content)
@@ -983,6 +1051,285 @@ impl AdvWikiMcpServer {
             text: format!("<!-- mime: {mime_type} -->\n{content}"),
         }])
     }
+
+    // tool - list_pages_by_type
+    async fn tool_list_pages_by_type(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
+        let page_type = args
+            .get("pageType")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing required arg: pageType")?
+            .to_lowercase();
+
+        let matches = self.pages_matching(|fm| {
+            fm.page_type.as_deref().map(|t| t.to_lowercase()) == Some(page_type.clone())
+        }).await.map_err(|e| format!("List error: {e}"))?;
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text: format_page_match_list(&format!("type: \"{page_type}\""), &matches),
+        }])
+    }
+
+    // tool - list_pages_by_project
+    async fn tool_list_pages_by_project(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
+        let project = args
+            .get("project")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing required arg: project")?
+            .to_lowercase();
+
+        let matches = self.pages_matching(|fm| {
+            fm.project.as_deref().map(|p| p.to_lowercase()) == Some(project.clone())
+        }).await.map_err(|e| format!("List error: {e}"))?;
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text: format_page_match_list(&format!("project: \"{project}\""), &matches),
+        }])
+    }
+
+    // tool - list_pages_by_tag
+    async fn tool_list_pages_by_tag(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
+        let tag = args
+            .get("tag")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing required arg: tag")?
+            .to_lowercase();
+
+        let matches = self.pages_matching(|fm| {
+            fm.tags.iter().any(|t| t.to_lowercase() == tag)
+        }).await.map_err(|e| format!("List error: {e}"))?;
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text: format_page_match_list(&format!("tag: \"{tag}\""), &matches),
+        }])
+    }
+
+    // tool - find_pages_without_sources
+    async fn tool_find_pages_without_sources(&self, _args: &Value) -> Result<Vec<McpToolContent>, String> {
+        let slugs = self.file_manager
+            .list_pages()
+            .await
+            .map_err(|e| format!("List error: {e}"))?;
+
+        let mut results: Vec<String> = Vec::new();
+        for slug in &slugs {
+            match self.file_manager.read_page(slug).await {
+                Ok(content) => {
+                    let no_sources = match crate::frontmatter::parse_frontmatter(&content) {
+                        Some(fm) => fm.sources.is_empty(),
+                        None => true,
+                    };
+                    if no_sources {
+                        results.push(slug.clone());
+                    }
+                }
+                Err(_) => results.push(slug.clone()),
+            }
+        }
+
+        let text = if results.is_empty() {
+            "_Todas as páginas têm pelo menos uma source documentada no frontmatter._".to_string()
+        } else {
+            let mut lines = vec!["# Páginas sem Sources Documentadas\n".to_string()];
+            for slug in &results {
+                lines.push(format!("- `{slug}`"));
+            }
+            lines.join("\n")
+        };
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text,
+        }])
+    }
+
+    // tool - rebuild_wiki_index
+    async fn tool_rebuild_wiki_index(&self, _args: &Value) -> Result<Vec<McpToolContent>, String> {
+        use std::collections::BTreeMap;
+
+        struct PageMeta {
+            slug: String,
+            page_type: Option<String>,
+            project: Option<String>,
+            status: Option<String>,
+        }
+
+        let slugs = self
+            .file_manager
+            .list_pages()
+            .await
+            .map_err(|e| format!("List error: {e}"))?;
+
+        let mut pages: Vec<PageMeta> = Vec::new();
+        for slug in &slugs {
+            if slug == "index" {
+                continue;
+            }
+            let fm = match self.file_manager.read_page(slug).await {
+                Ok(content) => crate::frontmatter::parse_frontmatter(&content),
+                Err(_) => None,
+            };
+            pages.push(PageMeta {
+                slug: slug.clone(),
+                page_type: fm.as_ref().and_then(|f| f.page_type.clone()),
+                project: fm.as_ref().and_then(|f| f.project.clone()),
+                status: fm.as_ref().and_then(|f| f.status.clone()),
+            });
+        }
+        pages.sort_by(|a, b| a.slug.cmp(&b.slug));
+
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+        // Group by type (BTreeMap keeps alphabetical order)
+        let mut by_type: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        let mut untyped: Vec<usize> = Vec::new();
+        for (i, page) in pages.iter().enumerate() {
+            match &page.page_type {
+                Some(t) => by_type.entry(t.clone()).or_default().push(i),
+                None => untyped.push(i),
+            }
+        }
+
+        // Group by project
+        let mut by_project: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (i, page) in pages.iter().enumerate() {
+            if let Some(proj) = &page.project {
+                by_project.entry(proj.clone()).or_default().push(i);
+            }
+        }
+
+        let mut lines: Vec<String> = vec![
+            "---".into(),
+            "type: index".into(),
+            format!("updated_at: \"{today}\""),
+            "---".into(),
+            String::new(),
+            "# Índice da Wiki".into(),
+            String::new(),
+            format!("> Gerado automaticamente por `rebuild_wiki_index` em {today}. Não edite manualmente."),
+            String::new(),
+            "## Por Tipo".into(),
+            String::new(),
+        ];
+
+        if by_type.is_empty() && untyped.is_empty() {
+            lines.push("_Nenhuma página encontrada._".into());
+            lines.push(String::new());
+        } else {
+            for (type_name, indices) in &by_type {
+                lines.push(format!("### {type_name}"));
+                lines.push(String::new());
+                for &i in indices {
+                    let page = &pages[i];
+                    let mut meta = Vec::new();
+                    if let Some(p) = &page.project { meta.push(format!("project: {p}")); }
+                    if let Some(s) = &page.status  { meta.push(format!("status: {s}")); }
+                    let suffix = if meta.is_empty() { String::new() } else { format!(" — {}", meta.join(", ")) };
+                    lines.push(format!("- [`{}`](wiki://page/{}){suffix}", page.slug, page.slug));
+                }
+                lines.push(String::new());
+            }
+            if !untyped.is_empty() {
+                lines.push("### (sem tipo)".into());
+                lines.push(String::new());
+                for &i in &untyped {
+                    let page = &pages[i];
+                    let mut meta = Vec::new();
+                    if let Some(p) = &page.project { meta.push(format!("project: {p}")); }
+                    if let Some(s) = &page.status  { meta.push(format!("status: {s}")); }
+                    let suffix = if meta.is_empty() { String::new() } else { format!(" — {}", meta.join(", ")) };
+                    lines.push(format!("- [`{}`](wiki://page/{}){suffix}", page.slug, page.slug));
+                }
+                lines.push(String::new());
+            }
+        }
+
+        if !by_project.is_empty() {
+            lines.push("## Por Projeto".into());
+            lines.push(String::new());
+            for (proj_name, indices) in &by_project {
+                lines.push(format!("### {proj_name}"));
+                lines.push(String::new());
+                for &i in indices {
+                    let page = &pages[i];
+                    let mut meta = Vec::new();
+                    if let Some(t) = &page.page_type { meta.push(format!("type: {t}")); }
+                    if let Some(s) = &page.status    { meta.push(format!("status: {s}")); }
+                    let suffix = if meta.is_empty() { String::new() } else { format!(" — {}", meta.join(", ")) };
+                    lines.push(format!("- [`{}`](wiki://page/{}){suffix}", page.slug, page.slug));
+                }
+                lines.push(String::new());
+            }
+        }
+
+        lines.push("---".into());
+        lines.push(format!("_Total: {} páginas indexadas._", pages.len()));
+
+        let content = lines.join("\n");
+
+        self.file_manager
+            .write_page("index", &content)
+            .await
+            .map_err(|e| format!("Write error: {e}"))?;
+
+        let log_entry = format!("[rebuild_wiki_index] Índice reconstruído com {} páginas", pages.len());
+        let _ = self.file_manager.append_to_log(&log_entry).await;
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text: format!(
+                "Índice reconstruído com sucesso.\n- Páginas indexadas: {}\n- URI: `wiki://page/index`",
+                pages.len()
+            ),
+        }])
+    }
+
+    /// lê todas as páginas e retorna os slugs cujo frontmatter satisfaz `predicate`.
+    async fn pages_matching(
+        &self,
+        predicate: impl Fn(&crate::frontmatter::PageFrontmatter) -> bool,
+    ) -> anyhow::Result<Vec<(String, crate::frontmatter::PageFrontmatter)>> {
+        let slugs = self.file_manager.list_pages().await?;
+        let mut matches = Vec::new();
+
+        for slug in &slugs {
+            if let Ok(content) = self.file_manager.read_page(slug).await {
+                if let Some(fm) = crate::frontmatter::parse_frontmatter(&content) {
+                    if predicate(&fm) {
+                        matches.push((slug.clone(), fm));
+                    }
+                }
+            }
+        }
+
+        matches.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(matches)
+    }
+}
+
+fn format_page_match_list(
+    filter_desc: &str,
+    matches: &[(String, crate::frontmatter::PageFrontmatter)],
+) -> String {
+    if matches.is_empty() {
+        return format!("_Nenhuma página encontrada com {filter_desc}._");
+    }
+    let mut lines = vec![format!("# Páginas com {filter_desc}\n")];
+    for (slug, fm) in matches {
+        let mut meta = Vec::new();
+        if let Some(t) = &fm.page_type { meta.push(format!("type: {t}")); }
+        if let Some(p) = &fm.project  { meta.push(format!("project: {p}")); }
+        if let Some(s) = &fm.status   { meta.push(format!("status: {s}")); }
+        let suffix = if meta.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", meta.join(", "))
+        };
+        lines.push(format!("- `{slug}`{suffix}"));
+    }
+    lines.join("\n")
 }
 
 #[cfg(test)]
@@ -1068,6 +1415,52 @@ mod tests {
 
         assert_eq!(a, b);
         assert_ne!(a, c);
+    }
+
+    #[tokio::test]
+    async fn test_rebuild_wiki_index_groups_by_type_and_project() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+        let file_manager = Arc::new(WikiFileManager::new(Some(root.clone())));
+        file_manager.init().await.unwrap();
+
+        let search_engine = Arc::new(WikiSearchEngine::new(root.join(".advwiki/index")).unwrap());
+
+        // Create pages with frontmatter
+        file_manager
+            .write_page("auth-service", "---\ntype: service\nproject: auth\nstatus: active\n---\n# Auth")
+            .await
+            .unwrap();
+        file_manager
+            .write_page("auth-adr-001", "---\ntype: decision\nproject: auth\nstatus: accepted\n---\n# ADR 001")
+            .await
+            .unwrap();
+        file_manager
+            .write_page("no-frontmatter", "# Plain page without frontmatter")
+            .await
+            .unwrap();
+
+        let server = AdvWikiMcpServer::new(file_manager.clone(), search_engine);
+        let result = server
+            .tool_rebuild_wiki_index(&json!({}))
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert!(result[0].text.contains("3"));
+        assert!(result[0].text.contains("wiki://page/index"));
+
+        // Verify the written index page
+        let index_content = file_manager.read_page("index").await.unwrap();
+        assert!(index_content.contains("### service"));
+        assert!(index_content.contains("### decision"));
+        assert!(index_content.contains("### (sem tipo)"));
+        assert!(index_content.contains("## Por Projeto"));
+        assert!(index_content.contains("### auth"));
+        assert!(index_content.contains("`auth-service`"));
+        assert!(index_content.contains("`no-frontmatter`"));
+        // The index page itself must not list itself
+        assert!(!index_content.contains("`index`"));
     }
 
     #[tokio::test]
