@@ -308,7 +308,9 @@ Deve vir depois de `index.md` e frontmatter, porque depende de uma organização
 
 ---
 
-## 5. Introduzir plano de alteração e diff antes de escrita
+## ~~5. Introduzir plano de alteração e diff antes de escrita~~ ✅ Implementado
+
+> **Status:** Implementado — `propose_page_update` grava uma proposta revisável em `.advwiki/proposals/<id>.json` e retorna um diff unificado; `apply_page_update` aplica a proposta pelo id, protegendo contra base alterada via verificação de hash MD5 (sobrescrevível com `force`). O modelo de alteração é conteúdo completo proposto + diff; patches estruturados por seção ficam como evolução futura possível.
 
 ### Objetivo
 
@@ -809,7 +811,7 @@ Pode virar um dos recursos mais interessantes do projeto, especialmente para uso
 
 ## Fase 2 — Escrita mais segura
 
-5. Criar plano de alteração + diff.
+5. ~~Criar plano de alteração + diff.~~ ✅
 6. Criar tools semânticas de domínio.
 7. Criar fluxo de ingestão curada.
 

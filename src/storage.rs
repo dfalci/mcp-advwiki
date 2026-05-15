@@ -16,6 +16,8 @@
 //         {source_id}
 //       metadata/             ← metadados de raw sources
 //         {source_id}.json
+//       proposals/            ← propostas de alteração (item 5 do roadmap)
+//         {proposal_id}.json
 
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
@@ -245,14 +247,16 @@ impl WikiFileManager {
 
     /// Inicializa a estrutura de diretórios da Wiki.
     ///
-    /// Cria `.advwiki/pages/`, `.advwiki/sources/`, `.advwiki/metadata/`
-    /// e os arquivos `.advwikilog.md` e `rawindex.md` se não existirem.
+    /// Cria `.advwiki/pages/`, `.advwiki/sources/`, `.advwiki/metadata/`,
+    /// `.advwiki/proposals/` e os arquivos `.advwikilog.md` e `rawindex.md`
+    /// se não existirem.
     pub async fn init(&self) -> anyhow::Result<()> {
         let dirs = [
             self.wiki_dir.clone(),
             self.wiki_dir.join("pages"),
             self.wiki_dir.join("sources"),
             self.wiki_dir.join("metadata"),
+            self.wiki_dir.join("proposals"),
         ];
 
         for dir in &dirs {
@@ -640,6 +644,54 @@ impl WikiFileManager {
 
         tracing::info!(source_id = %source_id, "Raw source excluída");
         Ok(())
+    }
+
+    // ── Propostas de Alteração ───────────────────────────────────────────────
+
+    /// Persiste (cria ou sobrescreve) uma proposta de alteração em
+    /// `.advwiki/proposals/{proposal_id}.json`.
+    pub async fn write_proposal(
+        &self,
+        proposal: &crate::change_plan::PageProposal,
+    ) -> anyhow::Result<()> {
+        Self::validate_slug(&proposal.proposal_id)?;
+
+        let proposals_dir = self.wiki_dir.join("proposals");
+        fs::create_dir_all(&proposals_dir).await?;
+
+        let path = proposals_dir.join(format!("{}.json", proposal.proposal_id));
+        let _ = self.validate_path(path.clone()).await?;
+
+        let json = serde_json::to_string_pretty(proposal)
+            .context("Falha ao serializar proposta para JSON")?;
+
+        fs::write(&path, json)
+            .await
+            .with_context(|| format!("Falha ao escrever proposta: {}", path.display()))?;
+
+        tracing::info!(proposal_id = %proposal.proposal_id, "Proposta de alteração salva");
+        Ok(())
+    }
+
+    /// Lê uma proposta de alteração pelo seu id.
+    pub async fn read_proposal(
+        &self,
+        proposal_id: &str,
+    ) -> anyhow::Result<crate::change_plan::PageProposal> {
+        Self::validate_slug(proposal_id)?;
+
+        let path = self
+            .wiki_dir
+            .join("proposals")
+            .join(format!("{proposal_id}.json"));
+        let _ = self.validate_path(path.clone()).await?;
+
+        let json = fs::read_to_string(&path)
+            .await
+            .with_context(|| format!("Falha ao ler proposta '{proposal_id}': {}", path.display()))?;
+
+        serde_json::from_str(&json)
+            .with_context(|| format!("Falha ao parsear JSON da proposta '{proposal_id}'"))
     }
 
     // ── Utilitários ──────────────────────────────────────────────────────────

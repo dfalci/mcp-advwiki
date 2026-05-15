@@ -1,3 +1,4 @@
+mod change_plan;
 mod frontmatter;
 mod lint;
 mod mcp_server;
