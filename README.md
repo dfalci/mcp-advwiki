@@ -119,6 +119,52 @@ If you omit the parameter, the behavior remains exactly the same as today.
 
 ---
 
+## Frontmatter
+
+Every wiki page can carry a YAML frontmatter block at the top — the same format used by Jekyll and Hugo:
+
+```markdown
+---
+type: service
+project: auth-service
+status: active
+tags:
+  - backend
+  - api
+sources:
+  - raw://source/abc123
+related:
+  - auth-adr-001
+owner: alice
+confidence: high
+---
+
+# Auth Service
+
+Your content here.
+```
+
+The server manages `updated_at` and `created_at` automatically: every time you call `update_page`, `updated_at` is injected or refreshed (format `YYYY-MM-DD`). `created_at` is only written once, on the first save.
+
+Pages without a frontmatter block are fully supported — the fields are all optional. The frontmatter is stripped before indexing, so BM25 search sees only the actual Markdown content.
+
+### Supported fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Semantic type: `service`, `decision`, `pattern`, `runbook`, `bug`, `note`, `index`, ... |
+| `project` | string | Which project this page belongs to |
+| `status` | string | e.g. `active`, `draft`, `deprecated`, `accepted` |
+| `created_at` | date | Set automatically on first write (YYYY-MM-DD) |
+| `updated_at` | date | Updated automatically on every write (YYYY-MM-DD) |
+| `confidence` | string | How reliable the content is: `high`, `medium`, `low` |
+| `sources` | list | `raw://source/<id>` URIs that back this page |
+| `related` | list | Slugs of related pages |
+| `tags` | list | Free-form tags |
+| `owner` | string | Person responsible for keeping it up to date |
+
+---
+
 ## How it works
 
 AdvWiki has four main pieces that talk to each other:
@@ -265,7 +311,12 @@ The AI has access to these MCP tools (names match what `tools/list` returns):
 - **ingest_source** — downloads external content (HTTP/HTTPS or local file path) and stores it as a raw source. Args: `sourceUri`, `sourceType`, optional `force` (default false). The `source_id` is a stable MD5 of `sourceUri`.
 - **ingest_extracted_content** — saves already-extracted text as a raw source. Args: `logicalUri` (must be `raw://source/<id>`), `sourceType`, `title`, `content`, optional `force`.
 - **delete_raw_source** — removes a raw source (content + metadata) and updates `rawindex.md`. Args: `sourceId`; optional `rationale` is logged.
-- **lint_wiki** — wiki quality report. Args: `scope` (`quick` | `all`). `quick` checks: broken internal links (`wiki://page/slug` pointing to missing pages), orphan pages (no page links to them), raw sources with no derived page, pages over 50 KB, pages missing a "See also" section. `all` adds: stale pages (file not modified in 90+ days), decision pages (`decisao-*`, `decision-*`, `adr-*`) missing a rationale section (`## Rationale`, `## Justificativa`, etc.), and similar page pairs (Jaccard token similarity > 60% — duplicate/merge candidates).
+- **lint_wiki** — wiki quality report. Args: `scope` (`quick` | `all`). `quick` checks: broken internal links (`wiki://page/slug` pointing to missing pages), orphan pages (no page links to them), raw sources with no derived page, pages without frontmatter, pages over 50 KB, pages missing a "See also" section. `all` adds: stale pages (file not modified in 90+ days), decision pages (`decisao-*`, `decision-*`, `adr-*`) missing a rationale section (`## Rationale`, `## Justificativa`, etc.), and similar page pairs (Jaccard token similarity > 60% — duplicate/merge candidates).
+- **list_pages_by_type** — lists pages whose frontmatter `type` field matches the given value. Args: `pageType` (e.g. `service`, `decision`).
+- **list_pages_by_project** — lists pages whose frontmatter `project` field matches. Args: `project`.
+- **list_pages_by_tag** — lists pages that contain the given tag in frontmatter. Args: `tag`.
+- **find_pages_without_sources** — lists pages with no `sources` field in frontmatter (or with it empty) — candidates for linkage with raw sources. No args.
+- **rebuild_wiki_index** — scans all pages, reads their frontmatter, and writes a navigable index to `wiki://page/index` grouped by `type` and `project`. Run this after bulk imports or reorganizations. No args.
 - **read_knowledge_uri** — reads any logical URI (`wiki://page/{slug}`, `wiki://log`, `wiki://index`, `wiki://rawindex`, `raw://source/{id}`, `raw://sourcemetadata/{id}`). Args: `uri`.
 
 Passive reads (page list, log, raw sources, metadata) are also available through MCP **resources** via `resources/list` and `resources/read` — no tool call required for plain reads.
