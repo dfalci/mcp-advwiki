@@ -26,6 +26,8 @@ Before reasoning about any microservice, component, repository, or architectural
 |---|---|
 | `query_wiki` | Search for context before answering about a project, service, component, or decision |
 | `update_page` | Create or update a page when the user asks for curated recording |
+| `propose_page_update` | Propose a page change with a reviewable diff, without writing — the safe path for changes to existing pages |
+| `apply_page_update` | Apply a proposal created by `propose_page_update` (re-checks the page has not changed since the proposal) |
 | `ingest_extracted_content` | Save raw or semi-raw content extracted from logs, specs, code snippets, or messages |
 | `lint_wiki` | Check index consistency or wiki integrity, rarely and only on request |
 | `read_knowledge_uri` | Read any wiki URI directly (`wiki://page/{slug}`, `wiki://log`, etc.) |
@@ -34,6 +36,15 @@ Before reasoning about any microservice, component, repository, or architectural
 | `list_pages_by_tag` | List all pages with a given tag |
 | `find_pages_without_sources` | Identify pages with no linked raw sources — candidates for linkage or review |
 | `rebuild_wiki_index` | Regenerate `wiki://page/index` after bulk changes or reorganizations |
+| `wiki_graph` | View the wiki link graph (nodes, edges, hubs, orphans, broken links); `summary`, `full` or `mermaid` formats |
+| `backlinks` | List which pages point to a page — useful before deleting or renaming |
+| `orphans` | List pages that no other page references — candidates for linkage |
+| `related_pages` | List pages related to a page, classifying the relationship |
+| `link_suggestions` | Suggest links between not-yet-connected pages, by content similarity, project and tags |
+| `find_claims` | List traceable claims (the `## Claims` block) across pages, with source, confidence, and verified date |
+| `find_claims_without_source` | Find claims with no documented origin |
+| `find_conflicting_claims` | Heuristic triage: pairs of claims with overlapping vocabulary, conflict-review candidates |
+| `verify_claim` | Mark a claim as verified, updating its `Last verified` date |
 | `resources/list` | List existing pages when the user wants to browse or locate pages |
 | `resources/read` | Read a specific page by URI |
 
@@ -253,7 +264,9 @@ Avoid generic slugs such as `architecture`, `notes`, `bugs`, `deployment`, or `d
 
 Before using `overwrite` on an existing page, Claude must read the current page with `resources/read`, unless the user explicitly asks to replace everything.
 
-Always include the `rationale` field with the reason for the change.
+For changes to existing pages that deserve review before writing, prefer the `propose_page_update` → `apply_page_update` flow. `propose_page_update` stores a proposal and returns a unified diff between the current and proposed content, without writing the page; `apply_page_update` applies the proposal by id, re-checking via a hash that the page has not changed since then (it refuses if it has, unless `force`). This is the safer path when there is a risk of losing content or when the user may want to review first.
+
+Always include the `rationale` field (or `reason`, for `propose_page_update`) with the reason for the change.
 
 Examples of `rationale`:
 

@@ -18,6 +18,7 @@
 //     - decisões sem rationale (slug com padrão de decisão + sem seção de justificativa)
 //     - páginas similares (Jaccard de tokens > SIMILARITY_THRESHOLD — candidatas a duplicata)
 
+use crate::graph::extract_wiki_page_links;
 use crate::search::WikiSearchEngine;
 use crate::storage::WikiFileManager;
 use std::collections::{HashMap, HashSet};
@@ -365,33 +366,6 @@ pub async fn run_lint(
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// extrai slugs referenciados via `wiki://page/{slug}` no conteúdo de uma página.
-pub fn extract_wiki_page_links(content: &str) -> Vec<String> {
-    let prefix = "wiki://page/";
-    let mut links = Vec::new();
-    let mut rest = content;
-
-    while let Some(pos) = rest.find(prefix) {
-        rest = &rest[pos + prefix.len()..];
-        let end = rest
-            .find(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != '.')
-            .unwrap_or(rest.len());
-        // slug não pode terminar com '.' (validate_slug rejeita) — strip de pontuação final
-        let slug = rest[..end].trim_end_matches('.');
-        if !slug.is_empty() {
-            links.push(slug.to_string());
-        }
-        if end >= rest.len() {
-            break;
-        }
-        rest = &rest[end..];
-    }
-
-    links.sort();
-    links.dedup();
-    links
-}
-
 async fn check_stale_pages(
     file_manager: &WikiFileManager,
     page_contents: &HashMap<String, String>,
@@ -487,7 +461,7 @@ fn check_similar_pages(page_contents: &HashMap<String, String>) -> Vec<SimilarPa
     pairs
 }
 
-fn tokenize(content: &str) -> HashSet<String> {
+pub(crate) fn tokenize(content: &str) -> HashSet<String> {
     content
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| w.len() >= MIN_TOKEN_LEN)
@@ -495,7 +469,7 @@ fn tokenize(content: &str) -> HashSet<String> {
         .collect()
 }
 
-fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f32 {
+pub(crate) fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f32 {
     let intersection = a.intersection(b).count();
     let union = a.len() + b.len() - intersection;
     if union == 0 {
@@ -522,52 +496,6 @@ mod tests {
         let m = Arc::new(WikiFileManager::new(Some(root)));
         m.init().await.unwrap();
         m
-    }
-
-    // ── extract_wiki_page_links ──────────────────────────────────────────────
-
-    #[test]
-    fn test_extract_links_single() {
-        let content = "veja [esta página](wiki://page/getting-started) para mais";
-        assert_eq!(extract_wiki_page_links(content), vec!["getting-started"]);
-    }
-
-    #[test]
-    fn test_extract_links_multiple() {
-        let content = "links: wiki://page/home e wiki://page/api-reference aqui";
-        assert_eq!(
-            extract_wiki_page_links(content),
-            vec!["api-reference", "home"]
-        );
-    }
-
-    #[test]
-    fn test_extract_links_dedup() {
-        let content = "wiki://page/home aparece wiki://page/home novamente";
-        assert_eq!(extract_wiki_page_links(content), vec!["home"]);
-    }
-
-    #[test]
-    fn test_extract_links_empty() {
-        assert!(extract_wiki_page_links("sem links aqui").is_empty());
-    }
-
-    #[test]
-    fn test_extract_links_no_false_positives() {
-        let content = "wiki://log e wiki://index e raw://source/abc não são page links";
-        assert!(extract_wiki_page_links(content).is_empty());
-    }
-
-    #[test]
-    fn test_extract_links_at_end_of_string() {
-        let content = "veja wiki://page/home";
-        assert_eq!(extract_wiki_page_links(content), vec!["home"]);
-    }
-
-    #[test]
-    fn test_extract_links_with_trailing_punctuation() {
-        let content = "confira wiki://page/home.";
-        assert_eq!(extract_wiki_page_links(content), vec!["home"]);
     }
 
     // ── is_decision_slug / has_rationale_section ─────────────────────────────

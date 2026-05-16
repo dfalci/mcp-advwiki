@@ -26,6 +26,8 @@ Antes de raciocinar sobre qualquer microsserviço, componente, repositório ou d
 |---|---|
 | `query_wiki` | Buscar contexto antes de responder sobre um projeto, serviço, componente ou decisão |
 | `update_page` | Criar ou atualizar uma página quando o usuário pedir registro curado |
+| `propose_page_update` | Propor uma alteração de página com diff revisável, sem gravar — caminho seguro para mudanças em páginas existentes |
+| `apply_page_update` | Aplicar uma proposta criada por `propose_page_update` (revalida que a página não mudou desde a proposta) |
 | `ingest_extracted_content` | Salvar conteúdo bruto ou semi-bruto extraído de logs, specs, trechos de código ou mensagens |
 | `lint_wiki` | Verificar consistência do índice ou integridade da wiki, raramente e sob pedido |
 | `read_knowledge_uri` | Ler qualquer URI da wiki diretamente (`wiki://page/{slug}`, `wiki://log`, etc.) |
@@ -34,6 +36,15 @@ Antes de raciocinar sobre qualquer microsserviço, componente, repositório ou d
 | `list_pages_by_tag` | Listar todas as páginas com uma tag específica |
 | `find_pages_without_sources` | Identificar páginas sem raw sources vinculadas — candidatas a revisão ou linkagem |
 | `rebuild_wiki_index` | Regenerar `wiki://page/index` após mudanças em massa ou reorganizações |
+| `wiki_graph` | Ver o grafo de links da wiki (nós, arestas, hubs, órfãos, links quebrados); formatos `summary`, `full` ou `mermaid` |
+| `backlinks` | Listar quais páginas apontam para uma página — útil antes de remover ou renomear |
+| `orphans` | Listar páginas que nenhuma outra referencia — candidatas a linkagem |
+| `related_pages` | Listar páginas relacionadas a uma página, classificando a relação |
+| `link_suggestions` | Sugerir links entre páginas ainda não conectadas, por similaridade de conteúdo, projeto e tags |
+| `find_claims` | Listar claims rastreáveis (bloco `## Claims`) das páginas, com source, confiança e data de verificação |
+| `find_claims_without_source` | Encontrar claims sem origem documentada |
+| `find_conflicting_claims` | Triagem heurística: pares de claims com vocabulário sobreposto, candidatos a revisão de conflito |
+| `verify_claim` | Marcar um claim como verificado, atualizando a data de `Last verified` |
 | `resources/list` | Listar páginas existentes quando o usuário quiser navegar ou localizar páginas |
 | `resources/read` | Ler uma página específica pelo URI |
 
@@ -253,7 +264,9 @@ Evitar slugs genéricos como `arquitetura`, `notas`, `bugs`, `deploy` ou `decisa
 
 Antes de usar `overwrite` em página existente, Claude deve ler a página atual com `resources/read`, salvo se o usuário pedir explicitamente para substituir tudo.
 
-Sempre incluir o campo `rationale` com o motivo da alteração.
+Para alterações em páginas existentes que merecem revisão antes de gravar, prefira o fluxo `propose_page_update` → `apply_page_update`. O `propose_page_update` salva uma proposta e retorna um diff unificado entre o conteúdo atual e o proposto, sem gravar a página; o `apply_page_update` aplica a proposta pelo id, revalidando via hash que a página não mudou desde então (recusa se mudou, salvo `force`). É o caminho mais seguro quando há risco de perder conteúdo ou quando o usuário pode querer revisar antes.
+
+Sempre incluir o campo `rationale` (ou `reason`, no `propose_page_update`) com o motivo da alteração.
 
 Exemplos de `rationale`:
 

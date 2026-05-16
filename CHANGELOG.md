@@ -5,10 +5,22 @@ All notable changes to `mcp-advwiki` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.7] - 2026-05-16
 
 ### Added
 
+- **Link graph & backlinks** (`graph` module): the wiki can now be navigated as
+  a knowledge graph. Edges come from `wiki://page/` links in page bodies and
+  from the frontmatter `related` field.
+  - `wiki_graph`: renders the link graph in `summary`, `full`, or `mermaid`
+    format.
+  - `backlinks`: lists which pages point to a given page.
+  - `orphans`: lists pages with no incoming links (links from the generated
+    `index` page are ignored, so it does not mask real orphans).
+  - `related_pages`: lists pages related to a page, classifying each
+    relationship (bidirectional, declared in `related`, links-to, linked-from).
+  - `link_suggestions`: suggests links between not-yet-connected pages, ranking
+    by content similarity plus boosts for shared `project` and tags.
 - **Change planning with diff before writing** (`change_plan` module),
   covering roadmap item 5:
   - `propose_page_update`: stores a reviewable change proposal under
@@ -17,12 +29,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `apply_page_update`: applies a proposal by id, re-checking via an MD5
     hash that the page has not changed since the proposal (overridable with
     `force`), then writes the page and records the operation in the log.
+- **Traceable claims** (`claims` module), covering roadmap item 8: the
+  `## Claims` block of a page lists statements with origin, confidence, and
+  verification date (bilingual field labels).
+  - `find_claims`: lists claims across the wiki, or for a single page.
+  - `find_claims_without_source`: lists claims with no documented origin.
+  - `find_conflicting_claims`: heuristic triage — flags claim pairs with
+    overlapping vocabulary as conflict-review candidates (it does not detect
+    contradiction).
+  - `verify_claim`: updates a claim's `Last verified` date.
+- `-h` / `--help` now prints the binary version.
 
 ### Changed
 
-- Marked roadmap items 1-3 and 5 as implemented in `roadmap.md` and
-  `roadmap-pt.md`, with a per-item status note describing the delivered
-  tools and remaining gaps.
+- `extract_wiki_page_links` moved from the `lint` module to the new `graph`
+  module; `lint_wiki` keeps reusing it.
+- Marked roadmap items 1-5 and 8 as implemented in `roadmap.md` and
+  `roadmap-pt.md`, with a per-item status note describing the delivered tools
+  and remaining gaps.
 
 ## [0.1.6] - 2026-05-15
 
@@ -108,7 +132,7 @@ navigable wiki.
   `ingest_extracted_content`, `lint_wiki`, and `read_knowledge_uri`.
 - GitHub release workflow with cargo-dist and an npm installer.
 
-[Unreleased]: https://github.com/dfalci/mcp-advwiki/compare/v0.1.6...HEAD
+[0.1.7]: https://github.com/dfalci/mcp-advwiki/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/dfalci/mcp-advwiki/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/dfalci/mcp-advwiki/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/dfalci/mcp-advwiki/compare/v0.1.3...v0.1.4

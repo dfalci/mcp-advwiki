@@ -705,6 +705,140 @@ impl AdvWikiMcpServer {
                     "required": ["proposalId"]
                 }),
             },
+            McpTool {
+                name: "wiki_graph".into(),
+                description: Some("Retorna o grafo de links da Wiki (nós, arestas, hubs, órfãos e links quebrados). As arestas vêm de links wiki://page/ no corpo e do campo 'related' do frontmatter.".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {
+                        "format": {
+                            "type": "string",
+                            "description": "Formato de saída: 'summary' (resumo + hubs), 'full' (lista de adjacência) ou 'mermaid' (diagrama)",
+                            "enum": ["summary", "full", "mermaid"],
+                            "default": "summary"
+                        }
+                    }
+                }),
+            },
+            McpTool {
+                name: "backlinks".into(),
+                description: Some("Lista as páginas que apontam para uma página (backlinks).".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {
+                        "slug": {
+                            "type": "string",
+                            "description": "Slug da página (aceita também a URI wiki://page/{slug})"
+                        }
+                    },
+                    "required": ["slug"]
+                }),
+            },
+            McpTool {
+                name: "orphans".into(),
+                description: Some("Lista páginas órfãs — nenhuma outra página aponta para elas. Links da página 'index' gerada são ignorados.".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
+            McpTool {
+                name: "related_pages".into(),
+                description: Some("Lista páginas relacionadas a uma página, classificando a relação (bidirecional, declarada em 'related', aponta para, apontado por).".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {
+                        "slug": {
+                            "type": "string",
+                            "description": "Slug da página (aceita também a URI wiki://page/{slug})"
+                        }
+                    },
+                    "required": ["slug"]
+                }),
+            },
+            McpTool {
+                name: "link_suggestions".into(),
+                description: Some("Sugere links entre páginas ainda não conectadas, combinando similaridade de conteúdo com mesmo projeto e tags em comum.".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {
+                        "slug": {
+                            "type": "string",
+                            "description": "Se informado, sugere apenas links envolvendo esta página. Sem ele, varre toda a Wiki."
+                        },
+                        "maxSuggestions": {
+                            "type": "integer",
+                            "description": "Número máximo de sugestões",
+                            "default": 10,
+                            "minimum": 1,
+                            "maximum": 50
+                        },
+                        "minSimilarity": {
+                            "type": "number",
+                            "description": "Score mínimo para uma sugestão aparecer (0.0 a 1.0)",
+                            "default": 0.15
+                        }
+                    }
+                }),
+            },
+            McpTool {
+                name: "find_claims".into(),
+                description: Some("Lista os claims rastreáveis (bloco `## Claims`) das páginas da Wiki, com texto, source, confiança e data de verificação.".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {
+                        "slug": {
+                            "type": "string",
+                            "description": "Se informado, lista apenas os claims desta página. Sem ele, varre toda a Wiki."
+                        }
+                    }
+                }),
+            },
+            McpTool {
+                name: "find_claims_without_source".into(),
+                description: Some("Lista os claims que não têm o campo 'Source' — afirmações sem origem documentada.".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
+            McpTool {
+                name: "find_conflicting_claims".into(),
+                description: Some("Heurística: sinaliza pares de claims com vocabulário sobreposto como candidatos a revisão de conflito. Não detecta contradição de fato — apenas aponta pares a revisar.".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {
+                        "minSimilarity": {
+                            "type": "number",
+                            "description": "Sobreposição mínima de termos (Jaccard 0.0 a 1.0) para um par aparecer",
+                            "default": 0.25
+                        }
+                    }
+                }),
+            },
+            McpTool {
+                name: "verify_claim".into(),
+                description: Some("Atualiza a data de 'Last verified' de um claim, marcando-o como verificado.".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {
+                        "slug": {
+                            "type": "string",
+                            "description": "Slug da página (aceita também a URI wiki://page/{slug})"
+                        },
+                        "claimIndex": {
+                            "type": "integer",
+                            "description": "Índice 1-based do claim dentro do bloco `## Claims` (use find_claims para vê-los)",
+                            "minimum": 1
+                        },
+                        "date": {
+                            "type": "string",
+                            "description": "Data da verificação (YYYY-MM-DD). Default: hoje."
+                        }
+                    },
+                    "required": ["slug", "claimIndex"]
+                }),
+            },
         ];
 
         JsonRpcResponse::success(
@@ -751,6 +885,15 @@ impl AdvWikiMcpServer {
             "rebuild_wiki_index" => self.tool_rebuild_wiki_index(&arguments).await,
             "propose_page_update" => self.tool_propose_page_update(&arguments).await,
             "apply_page_update" => self.tool_apply_page_update(&arguments).await,
+            "wiki_graph" => self.tool_wiki_graph(&arguments).await,
+            "backlinks" => self.tool_backlinks(&arguments).await,
+            "orphans" => self.tool_orphans(&arguments).await,
+            "related_pages" => self.tool_related_pages(&arguments).await,
+            "link_suggestions" => self.tool_link_suggestions(&arguments).await,
+            "find_claims" => self.tool_find_claims(&arguments).await,
+            "find_claims_without_source" => self.tool_find_claims_without_source(&arguments).await,
+            "find_conflicting_claims" => self.tool_find_conflicting_claims(&arguments).await,
+            "verify_claim" => self.tool_verify_claim(&arguments).await,
             _ => Err(format!("Tool not found: {name}")),
         };
 
@@ -1487,6 +1630,431 @@ impl AdvWikiMcpServer {
         }])
     }
 
+    // tool - wiki_graph
+    async fn tool_wiki_graph(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
+        let format = args
+            .get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("summary");
+
+        if !matches!(format, "summary" | "full" | "mermaid") {
+            return Err(format!(
+                "Formato inválido: '{format}'. Use 'summary', 'full' ou 'mermaid'."
+            ));
+        }
+
+        let graph = crate::graph::WikiGraph::build(&self.file_manager)
+            .await
+            .map_err(|e| format!("Graph error: {e}"))?;
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text: graph.render(format),
+        }])
+    }
+
+    // tool - backlinks
+    async fn tool_backlinks(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
+        let slug = args
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .map(normalize_page_slug)
+            .ok_or("Missing required arg: slug")?;
+
+        let graph = crate::graph::WikiGraph::build(&self.file_manager)
+            .await
+            .map_err(|e| format!("Graph error: {e}"))?;
+
+        if !graph.contains(slug) {
+            return Err(format!("Página '{slug}' não existe na Wiki."));
+        }
+
+        let backlinks = graph.backlinks(slug);
+        let text = if backlinks.is_empty() {
+            format!(
+                "# Backlinks para `{slug}`\n\n_Nenhuma página aponta para esta — é uma página órfã._"
+            )
+        } else {
+            let mut lines = vec![format!("# Backlinks para `{slug}`\n")];
+            for (src, kind) in backlinks {
+                lines.push(format!("- `{src}` ({})", crate::graph::edge_kind_label(kind)));
+            }
+            lines.join("\n")
+        };
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text,
+        }])
+    }
+
+    // tool - orphans
+    async fn tool_orphans(&self, _args: &Value) -> Result<Vec<McpToolContent>, String> {
+        let graph = crate::graph::WikiGraph::build(&self.file_manager)
+            .await
+            .map_err(|e| format!("Graph error: {e}"))?;
+
+        let orphans = graph.orphans();
+        let text = if orphans.is_empty() {
+            "_Nenhuma página órfã — toda página recebe ao menos um link._".to_string()
+        } else {
+            let mut lines = vec![
+                "# Páginas Órfãs\n".to_string(),
+                "_Nenhuma outra página aponta para estas (links da página `index` gerada são ignorados)._\n".to_string(),
+            ];
+            for slug in &orphans {
+                lines.push(format!("- `{slug}`"));
+            }
+            lines.join("\n")
+        };
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text,
+        }])
+    }
+
+    // tool - related_pages
+    async fn tool_related_pages(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
+        let slug = args
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .map(normalize_page_slug)
+            .ok_or("Missing required arg: slug")?;
+
+        let graph = crate::graph::WikiGraph::build(&self.file_manager)
+            .await
+            .map_err(|e| format!("Graph error: {e}"))?;
+
+        if !graph.contains(slug) {
+            return Err(format!("Página '{slug}' não existe na Wiki."));
+        }
+
+        let related = graph.related(slug);
+        let text = if related.is_empty() {
+            format!("# Páginas Relacionadas a `{slug}`\n\n_Nenhuma página relacionada encontrada._")
+        } else {
+            let mut lines = vec![format!("# Páginas Relacionadas a `{slug}`\n")];
+            for entry in related {
+                lines.push(format!("- `{}` — {}", entry.slug, entry.relation.label()));
+            }
+            lines.join("\n")
+        };
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text,
+        }])
+    }
+
+    // tool - link_suggestions
+    async fn tool_link_suggestions(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
+        let focus = args
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .map(normalize_page_slug);
+
+        let max_suggestions = args
+            .get("maxSuggestions")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(10) as usize;
+
+        let min_similarity = args
+            .get("minSimilarity")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.15) as f32;
+
+        let graph = crate::graph::WikiGraph::build(&self.file_manager)
+            .await
+            .map_err(|e| format!("Graph error: {e}"))?;
+
+        if let Some(f) = focus {
+            if !graph.contains(f) {
+                return Err(format!("Página '{f}' não existe na Wiki."));
+            }
+        }
+
+        let suggestions = crate::graph::suggest_links(
+            &self.file_manager,
+            &graph,
+            focus,
+            min_similarity,
+            max_suggestions,
+        )
+        .await
+        .map_err(|e| format!("Suggestion error: {e}"))?;
+
+        let text = if suggestions.is_empty() {
+            "_Nenhuma sugestão de link encontrada com os critérios atuais._".to_string()
+        } else {
+            let mut lines = vec!["# Sugestões de Links\n".to_string()];
+            for s in &suggestions {
+                lines.push(format!(
+                    "- `{}` ⇄ `{}` (score {:.2}) — {}",
+                    s.from,
+                    s.to,
+                    s.score,
+                    s.reasons.join("; ")
+                ));
+            }
+            lines.join("\n")
+        };
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text,
+        }])
+    }
+
+    // tool - find_claims
+    async fn tool_find_claims(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
+        let focus = args
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .map(normalize_page_slug);
+
+        let slugs: Vec<String> = match focus {
+            Some(s) => {
+                if self.file_manager.read_page(s).await.is_err() {
+                    return Err(format!("Página '{s}' não existe na Wiki."));
+                }
+                vec![s.to_string()]
+            }
+            None => self
+                .file_manager
+                .list_pages()
+                .await
+                .map_err(|e| format!("List error: {e}"))?,
+        };
+
+        let mut lines = vec!["# Claims".to_string()];
+        let mut total = 0;
+        for slug in &slugs {
+            let content = match self.file_manager.read_page(slug).await {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let claims = crate::claims::parse_claims(&content);
+            if claims.is_empty() {
+                continue;
+            }
+            lines.push(String::new());
+            lines.push(format!("## `{slug}`"));
+            for (i, claim) in claims.iter().enumerate() {
+                total += 1;
+                lines.push(format!("\n{}. {}", i + 1, claim.text));
+                lines.push(format!(
+                    "   - Source: {}",
+                    claim.source.as_deref().unwrap_or("_(ausente)_")
+                ));
+                lines.push(format!(
+                    "   - Confidence: {}",
+                    claim.confidence.as_deref().unwrap_or("_(ausente)_")
+                ));
+                lines.push(format!(
+                    "   - Last verified: {}",
+                    claim.last_verified.as_deref().unwrap_or("_(ausente)_")
+                ));
+            }
+        }
+
+        if total == 0 {
+            let text = match focus {
+                Some(s) => format!("_A página `{s}` não tem claims registrados._"),
+                None => "_Nenhuma página tem claims registrados._".to_string(),
+            };
+            return Ok(vec![McpToolContent {
+                content_type: "text".into(),
+                text,
+            }]);
+        }
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text: lines.join("\n"),
+        }])
+    }
+
+    // tool - find_claims_without_source
+    async fn tool_find_claims_without_source(
+        &self,
+        _args: &Value,
+    ) -> Result<Vec<McpToolContent>, String> {
+        let slugs = self
+            .file_manager
+            .list_pages()
+            .await
+            .map_err(|e| format!("List error: {e}"))?;
+
+        let mut lines = vec!["# Claims sem Source\n".to_string()];
+        let mut total = 0;
+        for slug in &slugs {
+            let content = match self.file_manager.read_page(slug).await {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let claims = crate::claims::parse_claims(&content);
+            let missing: Vec<(usize, &crate::claims::Claim)> = claims
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.source.is_none())
+                .collect();
+            if missing.is_empty() {
+                continue;
+            }
+            lines.push(format!("## `{slug}`"));
+            for (i, claim) in missing {
+                total += 1;
+                lines.push(format!("- [{}] {}", i + 1, claim.text));
+            }
+            lines.push(String::new());
+        }
+
+        if total == 0 {
+            return Ok(vec![McpToolContent {
+                content_type: "text".into(),
+                text: "_Todos os claims têm Source documentada._".to_string(),
+            }]);
+        }
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text: lines.join("\n"),
+        }])
+    }
+
+    // tool - find_conflicting_claims
+    async fn tool_find_conflicting_claims(
+        &self,
+        args: &Value,
+    ) -> Result<Vec<McpToolContent>, String> {
+        let min_similarity = args
+            .get("minSimilarity")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.25) as f32;
+
+        let slugs = self
+            .file_manager
+            .list_pages()
+            .await
+            .map_err(|e| format!("List error: {e}"))?;
+
+        struct ClaimRef {
+            slug: String,
+            index: usize,
+            text: String,
+            tokens: std::collections::HashSet<String>,
+        }
+
+        let mut all: Vec<ClaimRef> = Vec::new();
+        for slug in &slugs {
+            let content = match self.file_manager.read_page(slug).await {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            for (i, claim) in crate::claims::parse_claims(&content).into_iter().enumerate() {
+                let tokens = crate::lint::tokenize(&claim.text);
+                all.push(ClaimRef {
+                    slug: slug.clone(),
+                    index: i + 1,
+                    text: claim.text,
+                    tokens,
+                });
+            }
+        }
+
+        let mut pairs: Vec<(usize, usize, f32)> = Vec::new();
+        for i in 0..all.len() {
+            for j in (i + 1)..all.len() {
+                let sim = crate::lint::jaccard(&all[i].tokens, &all[j].tokens);
+                if sim >= min_similarity {
+                    pairs.push((i, j, sim));
+                }
+            }
+        }
+        pairs.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        let truncated = pairs.len() > 50;
+        pairs.truncate(50);
+
+        if pairs.is_empty() {
+            return Ok(vec![McpToolContent {
+                content_type: "text".into(),
+                text: "_Nenhum par de claims com vocabulário sobreposto acima do limite._"
+                    .to_string(),
+            }]);
+        }
+
+        let mut lines = vec![
+            "# Claims Candidatos a Conflito\n".to_string(),
+            "_Pares de claims com vocabulário sobreposto. Triagem heurística — revise se realmente se contradizem._\n".to_string(),
+        ];
+        for (i, j, sim) in pairs {
+            let a = &all[i];
+            let b = &all[j];
+            lines.push(format!(
+                "- `{}` [{}] \"{}\"  ⇄  `{}` [{}] \"{}\" — {:.0}% de termos em comum",
+                a.slug, a.index, a.text, b.slug, b.index, b.text, sim * 100.0
+            ));
+        }
+        if truncated {
+            lines.push("\n_(exibindo os 50 pares de maior sobreposição)_".to_string());
+        }
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text: lines.join("\n"),
+        }])
+    }
+
+    // tool - verify_claim
+    async fn tool_verify_claim(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
+        let slug = args
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .map(normalize_page_slug)
+            .ok_or("Missing required arg: slug")?;
+
+        let claim_index = args
+            .get("claimIndex")
+            .and_then(|v| v.as_u64())
+            .ok_or("Missing required arg: claimIndex")?;
+        if claim_index < 1 {
+            return Err("claimIndex deve ser >= 1".to_string());
+        }
+
+        let date = args
+            .get("date")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+
+        let content = self
+            .file_manager
+            .read_page(slug)
+            .await
+            .map_err(|e| format!("Página '{slug}' não encontrada: {e}"))?;
+
+        let updated = crate::claims::set_last_verified(&content, (claim_index - 1) as usize, &date)?;
+
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let final_content = crate::frontmatter::update_date_fields(&updated, &today, false);
+
+        self.file_manager
+            .write_page(slug, &final_content)
+            .await
+            .map_err(|e| format!("Write error: {e}"))?;
+
+        let log_entry = format!("[verify_claim] `{slug}` claim {claim_index}: verificado em {date}");
+        let _ = self.file_manager.append_to_log(&log_entry).await;
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text: format!(
+                "Claim {claim_index} de `{slug}` marcado como verificado.\n- Last verified: {date}"
+            ),
+        }])
+    }
+
     /// lê todas as páginas e retorna os slugs cujo frontmatter satisfaz `predicate`.
     async fn pages_matching(
         &self,
@@ -1508,6 +2076,11 @@ impl AdvWikiMcpServer {
         matches.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(matches)
     }
+}
+
+/// aceita um slug puro ou uma URI `wiki://page/{slug}` e retorna sempre o slug.
+fn normalize_page_slug(input: &str) -> &str {
+    input.strip_prefix("wiki://page/").unwrap_or(input)
 }
 
 fn format_page_match_list(
@@ -1726,6 +2299,21 @@ mod tests {
         AdvWikiMcpServer::new(file_manager, search_engine)
     }
 
+    #[test]
+    fn test_normalize_page_slug() {
+        assert_eq!(normalize_page_slug("home"), "home");
+        assert_eq!(normalize_page_slug("wiki://page/home"), "home");
+        assert_eq!(normalize_page_slug("wiki://page/getting-started"), "getting-started");
+    }
+
+    /// monta um servidor de teste com uma Wiki vazia inicializada.
+    async fn make_test_server(root: std::path::PathBuf) -> AdvWikiMcpServer {
+        let file_manager = Arc::new(WikiFileManager::new(Some(root.clone())));
+        file_manager.init().await.unwrap();
+        let search_engine = Arc::new(WikiSearchEngine::new(root.join(".advwiki/index")).unwrap());
+        AdvWikiMcpServer::new(file_manager, search_engine)
+    }
+
     #[tokio::test]
     async fn test_propose_page_update_creates_reviewable_proposal() {
         let dir = TempDir::new().unwrap();
@@ -1867,5 +2455,200 @@ mod tests {
             .await;
         assert!(second.is_err());
         assert!(second.unwrap_err().contains("já foi aplicada"));
+    }
+
+    #[tokio::test]
+    async fn test_tool_wiki_graph_summary() {
+        let dir = TempDir::new().unwrap();
+        let server = make_test_server(dir.path().to_path_buf()).await;
+        server.file_manager.write_page("home", "wiki://page/about").await.unwrap();
+        server.file_manager.write_page("about", "sobre").await.unwrap();
+
+        let response = server.tool_wiki_graph(&json!({})).await.unwrap();
+        assert!(response[0].text.contains("# Grafo da Wiki"));
+        assert!(response[0].text.contains("- Páginas (nós): 2"));
+        assert!(response[0].text.contains("- Links (arestas): 1"));
+    }
+
+    #[tokio::test]
+    async fn test_tool_wiki_graph_rejects_invalid_format() {
+        let dir = TempDir::new().unwrap();
+        let server = make_test_server(dir.path().to_path_buf()).await;
+        let result = server.tool_wiki_graph(&json!({ "format": "xml" })).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_tool_backlinks() {
+        let dir = TempDir::new().unwrap();
+        let server = make_test_server(dir.path().to_path_buf()).await;
+        server.file_manager.write_page("home", "wiki://page/about").await.unwrap();
+        server.file_manager.write_page("about", "sobre").await.unwrap();
+
+        // aceita a URI completa
+        let response = server
+            .tool_backlinks(&json!({ "slug": "wiki://page/about" }))
+            .await
+            .unwrap();
+        assert!(response[0].text.contains("Backlinks para `about`"));
+        assert!(response[0].text.contains("`home`"));
+
+        // página inexistente → erro
+        assert!(server
+            .tool_backlinks(&json!({ "slug": "nao-existe" }))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_tool_orphans() {
+        let dir = TempDir::new().unwrap();
+        let server = make_test_server(dir.path().to_path_buf()).await;
+        server.file_manager.write_page("home", "wiki://page/about").await.unwrap();
+        server.file_manager.write_page("about", "sobre").await.unwrap();
+        server.file_manager.write_page("lonely", "sozinha").await.unwrap();
+
+        let response = server.tool_orphans(&json!({})).await.unwrap();
+        assert!(response[0].text.contains("`home`"));
+        assert!(response[0].text.contains("`lonely`"));
+        assert!(!response[0].text.contains("`about`"));
+    }
+
+    #[tokio::test]
+    async fn test_tool_related_pages() {
+        let dir = TempDir::new().unwrap();
+        let server = make_test_server(dir.path().to_path_buf()).await;
+        server
+            .file_manager
+            .write_page("home", "wiki://page/about")
+            .await
+            .unwrap();
+        server.file_manager.write_page("about", "wiki://page/home").await.unwrap();
+
+        let response = server
+            .tool_related_pages(&json!({ "slug": "home" }))
+            .await
+            .unwrap();
+        assert!(response[0].text.contains("`about`"));
+        assert!(response[0].text.contains("bidirecional"));
+    }
+
+    #[tokio::test]
+    async fn test_tool_link_suggestions() {
+        let dir = TempDir::new().unwrap();
+        let server = make_test_server(dir.path().to_path_buf()).await;
+
+        let words: Vec<String> = (0..40).map(|i| format!("palavra{i:03}")).collect();
+        let shared = words.join(" ");
+        server.file_manager.write_page("page-a", &shared).await.unwrap();
+        server.file_manager.write_page("page-b", &shared).await.unwrap();
+
+        let response = server
+            .tool_link_suggestions(&json!({}))
+            .await
+            .unwrap();
+        assert!(response[0].text.contains("Sugestões de Links"));
+        assert!(response[0].text.contains("`page-a`"));
+        assert!(response[0].text.contains("`page-b`"));
+    }
+
+    #[tokio::test]
+    async fn test_tool_find_claims() {
+        let dir = TempDir::new().unwrap();
+        let server = make_test_server(dir.path().to_path_buf()).await;
+        server
+            .file_manager
+            .write_page(
+                "doc",
+                "# Doc\n\n## Claims\n\n- A usa três escopos.\n  - Source: `wiki://page/x`\n  - Confidence: high\n  - Last verified: 2026-05-11",
+            )
+            .await
+            .unwrap();
+
+        let response = server.tool_find_claims(&json!({})).await.unwrap();
+        assert!(response[0].text.contains("`doc`"));
+        assert!(response[0].text.contains("A usa três escopos."));
+        assert!(response[0].text.contains("Confidence: high"));
+    }
+
+    #[tokio::test]
+    async fn test_tool_find_claims_without_source() {
+        let dir = TempDir::new().unwrap();
+        let server = make_test_server(dir.path().to_path_buf()).await;
+        server
+            .file_manager
+            .write_page(
+                "doc",
+                "## Claims\n\n- Claim com fonte.\n  - Source: `raw://source/y`\n\n- Claim sem fonte.\n  - Confidence: low",
+            )
+            .await
+            .unwrap();
+
+        let response = server
+            .tool_find_claims_without_source(&json!({}))
+            .await
+            .unwrap();
+        assert!(response[0].text.contains("Claim sem fonte."));
+        assert!(!response[0].text.contains("Claim com fonte."));
+    }
+
+    #[tokio::test]
+    async fn test_tool_find_conflicting_claims() {
+        let dir = TempDir::new().unwrap();
+        let server = make_test_server(dir.path().to_path_buf()).await;
+        server
+            .file_manager
+            .write_page(
+                "page-a",
+                "## Claims\n\n- O servico usa autenticacao via token jwt assinado.",
+            )
+            .await
+            .unwrap();
+        server
+            .file_manager
+            .write_page(
+                "page-b",
+                "## Claims\n\n- O servico usa autenticacao via token jwt assinado.",
+            )
+            .await
+            .unwrap();
+
+        let response = server
+            .tool_find_conflicting_claims(&json!({ "minSimilarity": 0.5 }))
+            .await
+            .unwrap();
+        assert!(response[0].text.contains("Candidatos a Conflito"));
+        assert!(response[0].text.contains("`page-a`"));
+        assert!(response[0].text.contains("`page-b`"));
+    }
+
+    #[tokio::test]
+    async fn test_tool_verify_claim() {
+        let dir = TempDir::new().unwrap();
+        let server = make_test_server(dir.path().to_path_buf()).await;
+        server
+            .file_manager
+            .write_page(
+                "doc",
+                "## Claims\n\n- Afirmacao a verificar.\n  - Source: `wiki://page/x`\n  - Last verified: 2026-01-01",
+            )
+            .await
+            .unwrap();
+
+        let response = server
+            .tool_verify_claim(&json!({ "slug": "doc", "claimIndex": 1, "date": "2026-05-16" }))
+            .await
+            .unwrap();
+        assert!(response[0].text.contains("verificado"));
+
+        let content = server.file_manager.read_page("doc").await.unwrap();
+        assert!(content.contains("Last verified: 2026-05-16"));
+        assert!(!content.contains("2026-01-01"));
+
+        // índice inválido → erro
+        assert!(server
+            .tool_verify_claim(&json!({ "slug": "doc", "claimIndex": 9 }))
+            .await
+            .is_err());
     }
 }

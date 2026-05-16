@@ -1,5 +1,7 @@
 mod change_plan;
+mod claims;
 mod frontmatter;
+mod graph;
 mod lint;
 mod mcp_server;
 mod search;
@@ -10,7 +12,8 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-const HELP_BANNER: &str = r#"
+const HELP_BANNER: &str = concat!(
+    r#"
 ╔═══════════════════════════════════════════════════════╗
 ║                                                       ║
 ║    ███╗   ███╗ ██████╗██████╗                         ║
@@ -32,6 +35,10 @@ const HELP_BANNER: &str = r#"
 ║                                                       ║
 ╚═══════════════════════════════════════════════════════╝
 
+  mcp-advwiki v"#,
+    env!("CARGO_PKG_VERSION"),
+    r#"
+
 Uso:
   mcp-advwiki [--root <PATH>]        start the mcpserver (listen stdin/stdout)
   mcp-advwiki -h, --help             show this help message
@@ -52,7 +59,8 @@ Claude Desktop configuration (claude_desktop_config.json):
       }
     }
   }
-"#;
+"#
+);
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct CliOptions {

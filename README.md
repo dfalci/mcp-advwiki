@@ -320,6 +320,15 @@ The AI has access to these MCP tools (names match what `tools/list` returns):
 - **list_pages_by_tag** — lists pages that contain the given tag in frontmatter. Args: `tag`.
 - **find_pages_without_sources** — lists pages with no `sources` field in frontmatter (or with it empty) — candidates for linkage with raw sources. No args.
 - **rebuild_wiki_index** — scans all pages, reads their frontmatter, and writes a navigable index to `wiki://page/index` grouped by `type` and `project`. Run this after bulk imports or reorganizations. No args.
+- **wiki_graph** — renders the wiki link graph. Edges come from `wiki://page/` links in page bodies and from the frontmatter `related` field. Args: optional `format` (`summary` — counts plus top hubs; `full` — adjacency list; `mermaid` — diagram; default `summary`).
+- **backlinks** — lists pages that point to a given page. Args: `slug` (also accepts a `wiki://page/{slug}` URI).
+- **orphans** — lists pages with no incoming links. Links from the generated `index` page are ignored, so the index does not mask real orphans. No args.
+- **related_pages** — lists pages related to a given page, classifying each relationship as bidirectional, declared (frontmatter `related`), links-to, or linked-from. Args: `slug`.
+- **link_suggestions** — suggests links between not-yet-connected pages, ranking by content similarity (Jaccard) plus boosts for shared `project` and tags. Args: optional `slug` (focus on one page; otherwise scans the whole wiki), `maxSuggestions` (default 10), `minSimilarity` (default 0.15).
+- **find_claims** — lists traceable claims (the `## Claims` block) across the wiki, with each claim's text, source, confidence, and last-verified date. Args: optional `slug` (focus one page; otherwise scans the whole wiki).
+- **find_claims_without_source** — lists claims with no `Source` field — statements with no documented origin. No args.
+- **find_conflicting_claims** — heuristic triage: flags pairs of claims with overlapping vocabulary as conflict-review candidates. It does not detect contradiction. Args: optional `minSimilarity` (Jaccard, default 0.25).
+- **verify_claim** — updates a claim's `Last verified` date, marking it as re-checked. Args: `slug`, `claimIndex` (1-based), optional `date` (default today).
 - **read_knowledge_uri** — reads any logical URI (`wiki://page/{slug}`, `wiki://log`, `wiki://index`, `wiki://rawindex`, `raw://source/{id}`, `raw://sourcemetadata/{id}`). Args: `uri`.
 
 Passive reads (page list, log, raw sources, metadata) are also available through MCP **resources** via `resources/list` and `resources/read` — no tool call required for plain reads.

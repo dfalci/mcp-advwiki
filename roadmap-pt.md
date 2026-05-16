@@ -245,7 +245,9 @@ Depois de `index.md` e frontmatter, este é provavelmente o item com maior impac
 
 ---
 
-## 4. Criar grafo de links e backlinks
+## ~~4. Criar grafo de links e backlinks~~ ✅ Implementado
+
+> **Status:** Implementado — as tools `wiki_graph`, `backlinks`, `orphans`, `related_pages` e `link_suggestions`. As arestas vêm de links `wiki://page/` no corpo das páginas e do campo `related` do frontmatter; o `wiki_graph` renderiza o grafo nos formatos `summary`, `full` ou `mermaid`. Obs: os links usam a forma `wiki://page/` — a sintaxe estilo Obsidian `[[slug]]` mostrada abaixo não é interpretada.
 
 ### Objetivo
 
@@ -369,7 +371,9 @@ Média-alta.
 
 ---
 
-## 6. Criar tools semânticas de domínio
+## ~~6. Criar tools semânticas de domínio~~ — não será implementado
+
+> **Status:** Não será implementado — contratos rígidos por tipo engessariam um agente capaz (descartando ou espremendo informação que não cabe nos campos fixos) com pouco ganho. O valor pretendido — consistência de formato — é melhor entregue como orientação de estrutura nos skills, com o `lint_wiki` pegando desvios.
 
 ### Objetivo
 
@@ -489,7 +493,9 @@ Média.
 
 ---
 
-## 8. Registrar claims rastreáveis
+## ~~8. Registrar claims rastreáveis~~ ✅ Implementado
+
+> **Status:** Implementado — as tools `find_claims`, `find_claims_without_source`, `find_conflicting_claims` e `verify_claim`, sobre um bloco `## Claims` no corpo da página (labels de campo bilíngues). Obs: o `find_conflicting_claims` é uma heurística de sobreposição de palavras que levanta candidatos a revisão — detecção real de contradição depende da busca semântica do item 11.
 
 ### Objetivo
 
@@ -807,17 +813,17 @@ Pode virar um dos recursos mais interessantes do projeto, especialmente para uso
 1. ~~Criar `index.md` navegável.~~ ✅
 2. ~~Adicionar YAML frontmatter.~~ ✅
 3. ~~Melhorar `lint_wiki` para links, órfãos e metadados.~~ ✅
-4. Criar backlinks/grafo básico.
+4. ~~Criar backlinks/grafo básico.~~ ✅
 
 ## Fase 2 — Escrita mais segura
 
 5. ~~Criar plano de alteração + diff.~~ ✅
-6. Criar tools semânticas de domínio.
+6. ~~Criar tools semânticas de domínio.~~ — não será implementado
 7. Criar fluxo de ingestão curada.
 
 ## Fase 3 — Qualidade e auditoria
 
-8. Registrar claims rastreáveis.
+8. ~~Registrar claims rastreáveis.~~ ✅
 9. Integrar Git opcional.
 10. Detectar obsolescência por referência ao código.
 

@@ -245,7 +245,9 @@ After `index.md` and frontmatter, this is probably the item with the biggest pra
 
 ---
 
-## 4. Create a link graph and backlinks
+## ~~4. Create a link graph and backlinks~~ ✅ Implemented
+
+> **Status:** Implemented — the `wiki_graph`, `backlinks`, `orphans`, `related_pages`, and `link_suggestions` tools. Edges come from `wiki://page/` links in page bodies and from the frontmatter `related` field; `wiki_graph` renders the graph in `summary`, `full`, or `mermaid` format. Note: links use the `wiki://page/` form — the Obsidian-style `[[slug]]` syntax shown below is not parsed.
 
 ### Goal
 
@@ -369,7 +371,9 @@ It becomes especially important when the wiki starts being used in real projects
 
 ---
 
-## 6. Create semantic domain tools
+## ~~6. Create semantic domain tools~~ — not planned
+
+> **Status:** Not planned — rigid per-type contracts would constrain a capable agent (dropping or shoehorning information that does not fit the fixed fields) for little gain. The intended value — page-format consistency — is better delivered as structure guidance in the skill files, with `lint_wiki` catching drift.
 
 ### Goal
 
@@ -489,7 +493,9 @@ It is a natural evolution after semantic tools and diff.
 
 ---
 
-## 8. Record traceable claims
+## ~~8. Record traceable claims~~ ✅ Implemented
+
+> **Status:** Implemented — the `find_claims`, `find_claims_without_source`, `find_conflicting_claims`, and `verify_claim` tools, over a `## Claims` block in the page body (bilingual field labels). Note: `find_conflicting_claims` is a keyword-overlap heuristic that surfaces review candidates — true contradiction detection depends on the semantic search of item 11.
 
 ### Goal
 
@@ -807,17 +813,17 @@ This could become one of the most interesting features in the project, especiall
 1. ~~Create navigable `index.md`.~~ ✅
 2. ~~Add YAML frontmatter.~~ ✅
 3. ~~Improve `lint_wiki` for links, orphans, and metadata.~~ ✅
-4. Create basic backlinks/graph.
+4. ~~Create basic backlinks/graph.~~ ✅
 
 ## Phase 2 — Safer writing
 
 5. ~~Create change plan + diff.~~ ✅
-6. Create semantic domain tools.
+6. ~~Create semantic domain tools.~~ — not planned
 7. Create curated ingestion flow.
 
 ## Phase 3 — Quality and auditability
 
-8. Record traceable claims.
+8. ~~Record traceable claims.~~ ✅
 9. Integrate optional Git.
 10. Detect obsolescence through code references.
 
