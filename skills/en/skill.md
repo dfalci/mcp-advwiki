@@ -326,6 +326,50 @@ Not every page needs all sections. Claude should remove empty sections instead o
 
 ---
 
+## Claims format
+
+A `## Claims` block lets a page carry **traceable, individually-verifiable facts**. The tools `find_claims`, `find_claims_without_source`, `find_conflicting_claims`, and `verify_claim` all operate on this
+block — so the syntax must be exact, or the parser ignores it.
+
+### Syntax
+
+- The block opens with a heading `## Claims` (the parser also accepts `## Afirmações` / `## Afirmacoes`; heading matching is case-insensitive).
+- Each claim is **one top-level `-` bullet** at column 0 — no indentation. Use `- `, **never** a numbered list (`1.`, `2.`): numbered items are not recognized as claims.
+- The claim statement is the text right after `- ` on the bullet line (keep it to a single line).
+- Metadata fields are **2-space-indented sub-bullets** under the claim, one `- Label: value` per line:
+   - `Source` — where the claim was verified (file path, class, ticket, URL). A claim with no `Source` is flagged by `find_claims_without_source`.
+   - `Confidence` — the author's confidence, e.g. `high` / `medium` / `low`.
+   - `Last verified` — `YYYY-MM-DD`. `verify_claim` updates this field.
+- Field labels are case-insensitive and bilingual: `Source`/`Fonte`, `Confidence`/`Confiança`/`Confianca`, `Last verified`/`Última verificação`/`Ultima verificacao`. The parser takes the text after the first
+  `:`.
+- Claims are indexed implicitly by position. `verify_claim` addresses a claim by `slug` + a **1-based `claimIndex`**; run `find_claims` first to see the indexes.
+
+### Example
+
+  ```markdown
+  ## Claims
+
+  - The scheduler runs every 30 minutes — `Scheduler` sleeps `30 * 60 * 1000` ms between scans.
+    - Source: `sample-project/src/main/java/com/sample/scheduler/Scheduler.java`
+    - Confidence: high
+    - Last verified: 2026-05-16
+  - Payment and fiscal issuance are mock-only — no real gateway integration exists.
+    - Source: `sample-project/src/main/java/com/sample/business/billing/service/MockPaymentGateway.java`
+    - Confidence: high
+    - Last verified: 2026-05-16
+  ```
+
+### Placement and authoring
+
+- Place the `## Claims` block near the end of the page — after the main content, before `## See also` / `## References`.
+- Record as claims only the **load-bearing, verifiable, drift-prone facts**: things downstream reasoning depends on and that someone may need to re-check against a specific source — scheduler intervals,
+  queue/retry semantics, model or rate-limit choices, hard-coded values, security-relevant behavior, non-obvious invariants. Do not turn every sentence into a claim.
+- Every claim should carry a `Source`; prefer a precise pointer (file + class) over a vague one.
+- When you re-confirm a claim against current code, refresh `Last verified` (manually or via `verify_claim`). Use `find_conflicting_claims` to triage claims that may contradict each other after updates.
+- Adding or editing claims is still **writing to the wiki** — do it only when the user explicitly asks, like any other page change.
+- 
+---
+
 ## Root Index and Cross-Navigation
 
 In addition to creating or updating the target page, Claude should keep the wiki easy to navigate for someone who opened it without prior context.
