@@ -234,7 +234,7 @@ This is super handy when the project code is too big to fit in a system prompt o
 
 One of the coolest ideas about AdvWiki is using it together with a **Skill** — an instruction file that guides the AI's behavior.
 
-Check the skills directory for indicated samples.
+Check the skills directory. We offer a baseline skill that teaches the AI how to use the wiki effectively. You can customize it or create your own.
 
 ### How it works
 
