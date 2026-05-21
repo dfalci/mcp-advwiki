@@ -230,6 +230,51 @@ This is super handy when the project code is too big to fit in a system prompt o
 
 ---
 
+## Obsidian compatibility
+
+AdvWiki stores pages as plain Markdown files inside `.advwiki/pages/`. Point [Obsidian](https://obsidian.md) at that folder (or any vault that includes it) and **the same files become editable on both sides** — no plugin, no sync layer, no format translation.
+
+### Wikilink syntax everywhere
+
+Inline links use `[[slug]]` and `[[slug|Display text]]` — the same notation Obsidian uses natively. Backlinks, the graph view, and Obsidian's link suggestions all work out of the box. From the wiki side, `wiki_graph`, `backlinks`, `orphans`, `related_pages`, `link_suggestions`, and the lint's broken-link check follow the exact same links.
+
+```markdown
+Veja [[queue-service-overview]] para começar.
+Tabela completa em [[queue-service-endpoints|os endpoints REST]].
+```
+
+### Bidirectional editing
+
+You can edit a page in Obsidian and the server picks it up via the filesystem watcher (Tantivy reindexes within seconds). You can also have the AI edit via `update_page` / `propose_page_update` and Obsidian sees the new content immediately. Both directions are first-class.
+
+### Automatic, one-time migration
+
+Wikis created with previous AdvWiki versions used the legacy `[Text](wiki://page/slug)` form for inline links. The server migrates them to wikilink syntax **automatically on the next boot** — no skill action, no tool call required:
+
+- Idempotent (gated by a `.advwiki/.schema-version` marker — never runs twice).
+- Creates a full backup in `.advwiki/.backup-pre-wikilinks-{timestamp}/` before any write.
+- Atomic per file (write-temp + rename); safe to interrupt.
+- Logs a summary line to `.advwikilog.md` describing what changed.
+- Preserves code blocks, inline code (outside Claims `Source:` fields), frontmatter, and `raw://` URIs untouched.
+- Dry-run mode: set `ADVWIKI_MIGRATION_DRYRUN=1` to preview without writing.
+
+The link parser is also lenient: even after migration, pages pasted from older backups or external sources keep working — both `[[slug]]` and `wiki://page/slug` are recognized as the same edge in the graph.
+
+### What `wiki://` still means
+
+`wiki://` is **not gone** — it remains the MCP protocol identifier scheme used by:
+
+| Use | Example | Visible to Obsidian? |
+|---|---|---|
+| MCP resources URI / `read_knowledge_uri` arg | `wiki://page/home`, `wiki://log`, `wiki://index` | No |
+| Tool params (`backlinks`, `verify_claim`, ...) | `slug: "wiki://page/home"` | No |
+| Search index document key (Tantivy) | `wiki://page/home` | No |
+| Inline link in a page body | ~~`[Home](wiki://page/home)`~~ → use `[[home]]` | **Yes** |
+
+Only the last row affects what Obsidian renders. Everything else is JSON-RPC plumbing the AI sees and Obsidian never touches.
+
+---
+
 ## Skills and the learning process
 
 One of the coolest ideas about AdvWiki is using it together with a **Skill** — an instruction file that guides the AI's behavior.
@@ -300,6 +345,8 @@ AdvWiki exposes content through a simple URI scheme:
 
 The URIs are accessible both as **resources** (passive reading) and via **tools** like `read_knowledge_uri`.
 
+> These are **protocol-level identifiers** used between the AI and the server. For inline links inside page bodies use `[[slug]]` (Obsidian-compatible wikilink syntax) — see the [Obsidian compatibility](#obsidian-compatibility) section.
+
 ---
 
 ## Available tools
@@ -314,13 +361,13 @@ The AI has access to these MCP tools (names match what `tools/list` returns):
 - **ingest_source** — downloads external content (HTTP/HTTPS or local file path) and stores it as a raw source. Args: `sourceUri`, `sourceType`, optional `force` (default false). The `source_id` is a stable MD5 of `sourceUri`.
 - **ingest_extracted_content** — saves already-extracted text as a raw source. Args: `logicalUri` (must be `raw://source/<id>`), `sourceType`, `title`, `content`, optional `force`.
 - **delete_raw_source** — removes a raw source (content + metadata) and updates `rawindex.md`. Args: `sourceId`; optional `rationale` is logged.
-- **lint_wiki** — wiki quality report. Args: `scope` (`quick` | `all`). `quick` checks: broken internal links (`wiki://page/slug` pointing to missing pages), orphan pages (no page links to them), raw sources with no derived page, pages without frontmatter, pages over 50 KB, pages missing a "See also" section. `all` adds: stale pages (file not modified in 90+ days), decision pages (`decisao-*`, `decision-*`, `adr-*`) missing a rationale section (`## Rationale`, `## Justificativa`, etc.), and similar page pairs (Jaccard token similarity > 60% — duplicate/merge candidates).
+- **lint_wiki** — wiki quality report. Args: `scope` (`quick` | `all`). `quick` checks: broken internal links (both `[[slug]]` and legacy `wiki://page/slug` pointing to missing pages), orphan pages (no page links to them), raw sources with no derived page, pages without frontmatter, pages over 50 KB, pages missing a "See also" section. `all` adds: stale pages (file not modified in 90+ days), decision pages (`decisao-*`, `decision-*`, `adr-*`) missing a rationale section (`## Rationale`, `## Justificativa`, etc.), and similar page pairs (Jaccard token similarity > 60% — duplicate/merge candidates).
 - **list_pages_by_type** — lists pages whose frontmatter `type` field matches the given value. Args: `pageType` (e.g. `service`, `decision`).
 - **list_pages_by_project** — lists pages whose frontmatter `project` field matches. Args: `project`.
 - **list_pages_by_tag** — lists pages that contain the given tag in frontmatter. Args: `tag`.
 - **find_pages_without_sources** — lists pages with no `sources` field in frontmatter (or with it empty) — candidates for linkage with raw sources. No args.
 - **rebuild_wiki_index** — scans all pages, reads their frontmatter, and writes a navigable index to `wiki://page/index` grouped by `type` and `project`. Run this after bulk imports or reorganizations. No args.
-- **wiki_graph** — renders the wiki link graph. Edges come from `wiki://page/` links in page bodies and from the frontmatter `related` field. Args: optional `format` (`summary` — counts plus top hubs; `full` — adjacency list; `mermaid` — diagram; default `summary`).
+- **wiki_graph** — renders the wiki link graph. Edges come from inline page links in either `[[slug]]` (Obsidian) or legacy `wiki://page/slug` form, and from the frontmatter `related` field. Args: optional `format` (`summary` — counts plus top hubs; `full` — adjacency list; `mermaid` — diagram; default `summary`).
 - **backlinks** — lists pages that point to a given page. Args: `slug` (also accepts a `wiki://page/{slug}` URI).
 - **orphans** — lists pages with no incoming links. Links from the generated `index` page are ignored, so the index does not mask real orphans. No args.
 - **related_pages** — lists pages related to a given page, classifying each relationship as bidirectional, declared (frontmatter `related`), links-to, or linked-from. Args: `slug`.

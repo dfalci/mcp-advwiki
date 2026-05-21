@@ -4,6 +4,7 @@ mod frontmatter;
 mod graph;
 mod lint;
 mod mcp_server;
+mod migration;
 mod search;
 mod storage;
 mod watcher;
@@ -160,6 +161,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
         wiki_dir = %wiki.wiki_dir().display(),
         "Wiki inicializada"
     );
+
+    // Migrações de schema (idempotentes — quando a wiki já está atualizada, é no-op).
+    // Roda ANTES de qualquer indexação para que o índice já reflita o formato novo.
+    match migration::run_if_needed(&wiki).await {
+        Ok(report) if !report.skipped => {
+            tracing::info!(
+                from = report.from_version,
+                to = report.to_version,
+                pages = report.pages_changed,
+                links = report.links_converted,
+                dry_run = report.dry_run,
+                "Migração de schema concluída"
+            );
+        }
+        Ok(_) => {}
+        Err(e) => {
+            // Migração falhou — loga e segue. Wiki pré-existente continua funcionando
+            // graças ao parser lenient (que reconhece os dois formatos).
+            tracing::error!(error = %e, "Migração de schema falhou — seguindo com formato legado");
+        }
+    }
 
     let index_path = wiki.wiki_dir().join("index");
     let search_engine = Arc::new(

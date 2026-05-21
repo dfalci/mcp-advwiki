@@ -5,7 +5,58 @@ All notable changes to `mcp-advwiki` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.7] - 2026-05-16
+## [0.1.8] - 2026-05-21
+
+### Added
+
+- **Full bidirectional Obsidian compatibility** for inline page links. Wiki
+  bodies and Obsidian vaults now share the same link syntax — you can edit the
+  same `.md` file in either environment without translation:
+  - **Reading** (lenient parser): `extract_wiki_page_links` recognizes both
+    `[[slug]]` / `[[slug|Display text]]` (Obsidian wikilinks) and the legacy
+    `[Text](wiki://page/slug)` / bare `wiki://page/slug` forms in the same
+    document. Backlinks, graph, orphans, link suggestions, and lint all benefit
+    transparently.
+  - **Writing**: `rebuild_wiki_index` now emits `[[slug]]` so generated index
+    pages are first-class navigation in Obsidian.
+- **Automatic schema migration on boot** (`migration` module). Existing wikis
+  with legacy `wiki://page/X` body links are converted **once** to wikilink
+  syntax the next time the server starts — no skill action, no tool call, no
+  manual step:
+  - Gated by a `.advwiki/.schema-version` marker (idempotent — never runs
+    twice).
+  - Atomic per-file (write-temp + rename) and re-entrant: a crash mid-migration
+    is resumed safely on the next boot.
+  - Creates a full backup of `.advwiki/pages/` under
+    `.advwiki/.backup-pre-wikilinks-{timestamp}/` before the first write.
+  - Logs a summary entry to `.advwikilog.md` (`[migration] v0 → v2: N pages
+    processed, N changed, N links converted`).
+  - Supports `ADVWIKI_MIGRATION_DRYRUN=1` to preview the conversion without
+    writing.
+  - Honors markdown context: code blocks (` ``` `), inline code (`` ` ``)
+    outside of Claims `Source:` fields, frontmatter, and `raw://` URIs are all
+    preserved as-is.
+
+### Changed
+
+- `## Claims` blocks: `Source: \`wiki://page/X\`` is migrated to
+  `Source: [[X]]` (wiki-page sources only). Raw sources continue to use
+  ``Source: `raw://source/{id}` ``.
+- The `advwiki-memory` skill template and Claims examples now use `[[slug]]`
+  and `[[slug|Display]]` for inline body links. `wiki://` is documented as the
+  protocol-level URI used by `read_knowledge_uri`, `resources/read`, and tool
+  arguments.
+
+### Notes
+
+- `wiki://page/{slug}` remains valid wherever it appears as an **MCP protocol
+  URI** (tool arguments, search index keys, return messages, resources API).
+  This is invisible to Obsidian and stays unchanged.
+- The lenient parser stays in place permanently as a robustness measure —
+  pages pasted from external sources or restored from old backups continue to
+  work.
+
+
 
 ### Added
 
@@ -132,6 +183,7 @@ navigable wiki.
   `ingest_extracted_content`, `lint_wiki`, and `read_knowledge_uri`.
 - GitHub release workflow with cargo-dist and an npm installer.
 
+[0.1.8]: https://github.com/dfalci/mcp-advwiki/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/dfalci/mcp-advwiki/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/dfalci/mcp-advwiki/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/dfalci/mcp-advwiki/compare/v0.1.4...v0.1.5

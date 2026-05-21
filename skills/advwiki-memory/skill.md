@@ -43,6 +43,28 @@ Core rule:
 
 ---
 
+## Link syntax (Obsidian-compatible)
+
+Page bodies use **wikilink syntax** `[[slug]]` or `[[slug|Display text]]` —
+the same as Obsidian. The server also still accepts the legacy form
+`[Text](wiki://page/slug)` and bare `wiki://page/slug` for reading, but **new
+content must use `[[slug]]`**. Existing wikis are migrated automatically on
+server boot.
+
+`wiki://` URIs remain valid as **MCP protocol identifiers** used by
+`read_knowledge_uri`, `resources/read`, and tool return values
+(`wiki://page/{slug}`, `wiki://log`, `wiki://index`, `wiki://rawindex`). Do not
+use them as inline body links.
+
+| Where | Format |
+|---|---|
+| Inline link in page body | `[[slug]]` or `[[slug\|Display]]` |
+| Link in frontmatter `related` | bare slug: `- queue-service` |
+| MCP tool arg (`read_knowledge_uri`, `backlinks`, ...) | `wiki://page/{slug}` or bare slug |
+| Claims `Source` field | `[[slug]]` for wiki pages, `raw://source/{id}` for raw sources |
+
+---
+
 ## Available AdvWiki tools
 
 Use the actual MCP tools exposed by AdvWiki:
@@ -266,12 +288,18 @@ related:
 ## Claims
 
 - <Verifiable load-bearing fact.>
-  - Source: `<precise source>`
+  - Source: [[<source-slug>]]    # for wiki pages
   - Confidence: high|medium|low
   - Last verified: YYYY-MM-DD
 
+- <Another fact backed by external evidence.>
+  - Source: `raw://source/<source-id>`    # for raw sources
+  - Confidence: medium
+  - Last verified: YYYY-MM-DD
+
 ## See also
-- [Related page](wiki://page/<slug>): <why it matters>
+- [[<slug>]] — <why it matters>
+- [[<slug>|Custom display text]] — <why it matters>
 ```
 
 ---
@@ -288,8 +316,13 @@ Syntax must be exact:
 ## Claims
 
 - Claim text in one line.
-  - Source: `file/path/or/wiki/source`
+  - Source: [[some-wiki-page]]
   - Confidence: high
+  - Last verified: 2026-05-19
+
+- Another claim sourced from raw evidence.
+  - Source: `raw://source/abc123`
+  - Confidence: medium
   - Last verified: 2026-05-19
 ```
 
@@ -357,7 +390,10 @@ Avoid:
 - mixing multiple services in one page;
 - storing unstable implementation details as durable decisions;
 - overwriting existing pages without reading them;
-- creating isolated pages without links.
+- creating isolated pages without links;
+- writing body links in the legacy `[Text](wiki://page/slug)` form — use
+  `[[slug]]` or `[[slug|Display]]` so they render natively in Obsidian and
+  in the wiki's own graph.
 
 ---
 

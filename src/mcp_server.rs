@@ -1571,7 +1571,7 @@ impl AdvWikiMcpServer {
                     if let Some(p) = &page.project { meta.push(format!("project: {p}")); }
                     if let Some(s) = &page.status  { meta.push(format!("status: {s}")); }
                     let suffix = if meta.is_empty() { String::new() } else { format!(" — {}", meta.join(", ")) };
-                    lines.push(format!("- [`{}`](wiki://page/{}){suffix}", page.slug, page.slug));
+                    lines.push(format!("- [[{}]]{suffix}", page.slug));
                 }
                 lines.push(String::new());
             }
@@ -1584,7 +1584,7 @@ impl AdvWikiMcpServer {
                     if let Some(p) = &page.project { meta.push(format!("project: {p}")); }
                     if let Some(s) = &page.status  { meta.push(format!("status: {s}")); }
                     let suffix = if meta.is_empty() { String::new() } else { format!(" — {}", meta.join(", ")) };
-                    lines.push(format!("- [`{}`](wiki://page/{}){suffix}", page.slug, page.slug));
+                    lines.push(format!("- [[{}]]{suffix}", page.slug));
                 }
                 lines.push(String::new());
             }
@@ -1602,7 +1602,7 @@ impl AdvWikiMcpServer {
                     if let Some(t) = &page.page_type { meta.push(format!("type: {t}")); }
                     if let Some(s) = &page.status    { meta.push(format!("status: {s}")); }
                     let suffix = if meta.is_empty() { String::new() } else { format!(" — {}", meta.join(", ")) };
-                    lines.push(format!("- [`{}`](wiki://page/{}){suffix}", page.slug, page.slug));
+                    lines.push(format!("- [[{}]]{suffix}", page.slug));
                 }
                 lines.push(String::new());
             }
@@ -2231,10 +2231,10 @@ mod tests {
         assert!(index_content.contains("### (sem tipo)"));
         assert!(index_content.contains("## Por Projeto"));
         assert!(index_content.contains("### auth"));
-        assert!(index_content.contains("`auth-service`"));
-        assert!(index_content.contains("`no-frontmatter`"));
+        assert!(index_content.contains("[[auth-service]]"));
+        assert!(index_content.contains("[[no-frontmatter]]"));
         // The index page itself must not list itself
-        assert!(!index_content.contains("`index`"));
+        assert!(!index_content.contains("[[index]]"));
     }
 
     #[tokio::test]

@@ -425,10 +425,27 @@ impl WikiGraph {
 
 // ── Extração de links ────────────────────────────────────────────────────────
 
-/// Extrai slugs referenciados via `wiki://page/{slug}` no conteúdo de uma página.
+/// Extrai slugs referenciados no conteúdo de uma página.
+///
+/// Reconhece duas sintaxes em paralelo (lenient — não exige nenhuma):
+///   - `wiki://page/{slug}` — formato legado (markdown link ou bare).
+///   - `[[slug]]` e `[[slug|Texto]]` — formato wikilink (compatível com Obsidian).
+///
+/// Ambas geram a mesma aresta no grafo; um slug que apareça pelos dois caminhos
+/// é deduplicado na saída.
 pub fn extract_wiki_page_links(content: &str) -> Vec<String> {
+    let mut links: Vec<String> = Vec::new();
+    extract_legacy_wiki_links(content, &mut links);
+    extract_wikilink_braces(content, &mut links);
+
+    links.sort();
+    links.dedup();
+    links
+}
+
+/// Extrai slugs no formato legado `wiki://page/{slug}` (markdown link ou bare).
+fn extract_legacy_wiki_links(content: &str, out: &mut Vec<String>) {
     let prefix = "wiki://page/";
-    let mut links = Vec::new();
     let mut rest = content;
 
     while let Some(pos) = rest.find(prefix) {
@@ -439,17 +456,53 @@ pub fn extract_wiki_page_links(content: &str) -> Vec<String> {
         // slug não pode terminar com '.' (validate_slug rejeita) — strip de pontuação final
         let slug = rest[..end].trim_end_matches('.');
         if !slug.is_empty() {
-            links.push(slug.to_string());
+            out.push(slug.to_string());
         }
         if end >= rest.len() {
             break;
         }
         rest = &rest[end..];
     }
+}
 
-    links.sort();
-    links.dedup();
-    links
+/// Extrai slugs no formato wikilink `[[slug]]` ou `[[slug|Texto]]`.
+///
+/// O alvo (parte antes do `|`) deve ser um slug válido (alfanumérico + `-_.`).
+/// Não cruza newlines — wikilinks precisam estar na mesma linha.
+fn extract_wikilink_braces(content: &str, out: &mut Vec<String>) {
+    let mut rest = content;
+
+    while let Some(pos) = rest.find("[[") {
+        rest = &rest[pos + 2..];
+        // Procura fechamento `]]` ou newline (descarta quebra de linha — não é wikilink).
+        let Some(close) = rest.find("]]") else {
+            break;
+        };
+        let inner = &rest[..close];
+        if inner.contains('\n') {
+            // não cruza linhas — avança para depois do `[[` e tenta de novo
+            continue;
+        }
+
+        // Separa alvo de alias (se houver `|`).
+        let target = match inner.find('|') {
+            Some(p) => &inner[..p],
+            None => inner,
+        };
+        let target = target.trim();
+
+        // Valida o alvo como slug (mesma regra do `wiki://page/`).
+        let is_valid_slug = !target.is_empty()
+            && !target.ends_with('.')
+            && target
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
+        if is_valid_slug {
+            out.push(target.to_string());
+        }
+
+        rest = &rest[close + 2..];
+    }
 }
 
 // ── Sugestão de links ────────────────────────────────────────────────────────
@@ -619,6 +672,66 @@ mod tests {
     fn test_extract_links_with_trailing_punctuation() {
         let content = "confira wiki://page/home.";
         assert_eq!(extract_wiki_page_links(content), vec!["home"]);
+    }
+
+    // ── wikilink syntax (Obsidian-compatible) ────────────────────────────────
+
+    #[test]
+    fn test_extract_wikilink_simple() {
+        let content = "veja [[getting-started]] para começar";
+        assert_eq!(extract_wiki_page_links(content), vec!["getting-started"]);
+    }
+
+    #[test]
+    fn test_extract_wikilink_with_alias() {
+        let content = "veja [[getting-started|este guia]] para começar";
+        assert_eq!(extract_wiki_page_links(content), vec!["getting-started"]);
+    }
+
+    #[test]
+    fn test_extract_wikilink_multiple() {
+        let content = "links: [[home]] e [[api-reference|API]] aqui";
+        assert_eq!(
+            extract_wiki_page_links(content),
+            vec!["api-reference", "home"]
+        );
+    }
+
+    #[test]
+    fn test_extract_wikilink_mixed_with_legacy() {
+        // ambos os formatos no mesmo documento devem ser reconhecidos
+        let content = "antigo wiki://page/old-style e novo [[new-style]] aqui";
+        assert_eq!(
+            extract_wiki_page_links(content),
+            vec!["new-style", "old-style"]
+        );
+    }
+
+    #[test]
+    fn test_extract_wikilink_dedup_across_formats() {
+        // mesma página citada nos dois formatos vira uma só aresta
+        let content = "wiki://page/home e [[home]] e [[home|Início]]";
+        assert_eq!(extract_wiki_page_links(content), vec!["home"]);
+    }
+
+    #[test]
+    fn test_extract_wikilink_ignores_newline() {
+        // colchetes que cruzam linha não são wikilinks
+        let content = "[[\nhome\n]] não é link";
+        assert!(extract_wiki_page_links(content).is_empty());
+    }
+
+    #[test]
+    fn test_extract_wikilink_rejects_invalid_slug() {
+        // espaços e caracteres especiais no alvo invalidam o wikilink
+        let content = "[[com espaço]] e [[com/barra]]";
+        assert!(extract_wiki_page_links(content).is_empty());
+    }
+
+    #[test]
+    fn test_extract_wikilink_trims_target() {
+        let content = "[[  spaced-slug  |alias]]";
+        assert_eq!(extract_wiki_page_links(content), vec!["spaced-slug"]);
     }
 
     // ── build / backlinks ────────────────────────────────────────────────────
