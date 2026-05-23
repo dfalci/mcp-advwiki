@@ -88,7 +88,7 @@ use them as inline body links.
 - **Auto-managed**: `created_at` and `updated_at` are written by the server on every save — never set them manually.
 - **Not readable**: `wiki://list` and `raw://sources` are documented elsewhere but the server does not route them. Use `resources/list` or `list_pages_by_*` to enumerate.
 - **Transparent**: schema migration to wikilinks runs once on boot (backup + log); primary/secondary instance roles are automatic — no agent action needed.
-- **Bilingual claims**: field labels accept `Source`/`Fonte`, `Confidence`/`Confiança`, `Last verified`/`Última verificação`.
+- **Claim field labels**: use `Source`, `Confidence`, and `Last verified`. The server also accepts localized aliases for legacy content, but new claims must use the English labels.
 
 ---
 
@@ -126,7 +126,8 @@ conflict analysis, or when the user asks for traceability.
 AdvWiki search is BM25/Tantivy, not semantic search. Prefer short queries with
 exact terms: service names, modules, technologies, tables, queues, endpoints,
 classes, configuration keys, and exact errors. If results are weak, retry with
-useful variations, including Portuguese/English variants when relevant.
+useful variations, including alternative spellings or language variants that
+match how the content was originally written.
 
 Do at most 5 additional searches. Stop earlier if the recovered context is enough.
 
@@ -140,7 +141,7 @@ user, preferably with the page URI.
 Suggested format:
 
 ```text
-📚 Contexto recuperado da wiki:
+📚 Recovered wiki context:
 - `wiki://page/<slug>`: <short useful summary>
 
 <answer based on recovered context + current evidence>
@@ -160,12 +161,12 @@ Never write to AdvWiki on your own initiative.
 
 Write only when the user explicitly asks, with wording such as:
 
-- “registre isso na wiki”;
-- “salve essa decisão”;
-- “documente esse padrão”;
-- “atualize a página X”;
-- “coloque isso na memória do projeto”;
-- “guarde esse contexto para futuras sessões”.
+- "record this in the wiki";
+- "save this decision";
+- "document this pattern";
+- "update page X";
+- "put this in the project memory";
+- "keep this context for future sessions".
 
 If the intent to record is ambiguous, ask before writing.
 
