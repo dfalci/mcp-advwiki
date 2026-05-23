@@ -5,6 +5,19 @@ All notable changes to `mcp-advwiki` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-05-23
+
+### Changed
+
+- **`advwiki-memory` skill**: removed Portuguese terms from the embedded
+  skill's suggestions. The suggested context-recovery format header,
+  the example trigger phrases for writing to the wiki, and the search
+  variants guidance are now fully in English. The note about claim field
+  labels was rewritten to direct the agent to use only `Source`,
+  `Confidence`, and `Last verified` — the localized aliases remain
+  accepted server-side for legacy content but are no longer suggested as
+  authoring options.
+
 ## [0.1.9] - 2026-05-23
 
 ### Added
