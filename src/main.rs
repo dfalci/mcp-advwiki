@@ -17,7 +17,7 @@ use std::time::Duration;
 /// Intervalo entre tentativas de promoção quando a instância está em modo Secondary.
 /// Trade-off: muito curto = log/CPU desnecessários; muito longo = atraso pra
 /// assumir o índice depois que a primary cai.
-const SECONDARY_PROMOTION_POLL_INTERVAL: Duration = Duration::from_secs(30);
+const SECONDARY_PROMOTION_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 const HELP_BANNER: &str = concat!(
     r#"
