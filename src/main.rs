@@ -19,6 +19,14 @@ use std::time::Duration;
 /// assumir o índice depois que a primary cai.
 const SECONDARY_PROMOTION_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Conteúdo da skill embutido no binário em tempo de compilação. Distribuído
+/// junto com o executável para que `--skill` possa instalá-la em qualquer
+/// projeto sem precisar baixar nada.
+const EMBEDDED_SKILL: &str = include_str!("../skills/advwiki-memory/skill.md");
+
+/// Caminho-padrão (relativo à base) onde a skill é instalada por `--skill`.
+const SKILL_RELATIVE_PATH: &str = ".claude/skills/advwiki-memory/skill.md";
+
 const HELP_BANNER: &str = concat!(
     r#"
 ╔═══════════════════════════════════════════════════════╗
@@ -48,6 +56,7 @@ const HELP_BANNER: &str = concat!(
 
 Uso:
   mcp-advwiki [--root <PATH>]        start the mcpserver (listen stdin/stdout)
+  mcp-advwiki --skill [--root PATH]  install the AdvWiki skill into the project
   mcp-advwiki -h, --help             show this help message
 
 Opcoes:
@@ -55,6 +64,9 @@ Opcoes:
                      `.advwiki/`, `.advwikilog.md` e `rawindex.md`
                      will be read/created.
                      defaults execution dir.
+      --skill        write the bundled skill to
+                     `<root>/.claude/skills/advwiki-memory/skill.md`
+                     (creating parent dirs if needed) and exit.
   -h, --help         show this help message
 
 Claude Desktop configuration (claude_desktop_config.json):
@@ -73,6 +85,7 @@ Claude Desktop configuration (claude_desktop_config.json):
 struct CliOptions {
     root: Option<PathBuf>,
     show_help: bool,
+    install_skill: bool,
 }
 
 fn parse_cli_args(args: &[String]) -> Result<CliOptions, String> {
@@ -114,6 +127,10 @@ fn parse_cli_args(args: &[String]) -> Result<CliOptions, String> {
                 set_root_option(&mut options, value)?;
                 index += 1;
             }
+            "--skill" | "-skill" => {
+                options.install_skill = true;
+                index += 1;
+            }
             _ => {
                 return Err(format!("Parametro desconhecido: {arg}"));
             }
@@ -136,6 +153,29 @@ fn set_root_option(options: &mut CliOptions, value: &str) -> Result<(), String> 
     Ok(())
 }
 
+/// Escreve a skill embutida em `<base>/.claude/skills/advwiki-memory/skill.md`,
+/// criando o diretório pai se necessário. Sobrescreve um arquivo existente —
+/// a re-instalação é o caminho oficial para atualizar a skill após upgrade do
+/// binário. `base` vem de `--root` quando informado; senão, do diretório atual.
+fn install_skill(root: Option<&std::path::Path>) -> Result<PathBuf, String> {
+    let base: PathBuf = match root {
+        Some(p) => p.to_path_buf(),
+        None => std::env::current_dir()
+            .map_err(|e| format!("Falha ao obter diretório corrente: {e}"))?,
+    };
+
+    let target = base.join(SKILL_RELATIVE_PATH);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Falha ao criar diretório {}: {e}", parent.display()))?;
+    }
+
+    std::fs::write(&target, EMBEDDED_SKILL)
+        .map_err(|e| format!("Falha ao escrever skill em {}: {e}", target.display()))?;
+
+    Ok(target)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
@@ -149,6 +189,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     if cli.show_help {
         println!("{HELP_BANNER}");
+        return Ok(());
+    }
+
+    if cli.install_skill {
+        let target = install_skill(cli.root.as_deref())?;
+        println!("Skill instalada em: {}", target.display());
         return Ok(());
     }
 
@@ -287,8 +333,57 @@ mod tests {
             CliOptions {
                 root: None,
                 show_help: false,
+                install_skill: false,
             }
         );
+    }
+
+    #[test]
+    fn parse_cli_accepts_skill_flag_in_both_styles() {
+        let long = parse_cli_args(&["--skill".into()]).expect("parse should succeed");
+        assert!(long.install_skill);
+        assert!(!long.show_help);
+
+        let short = parse_cli_args(&["-skill".into()]).expect("parse should succeed");
+        assert!(short.install_skill);
+    }
+
+    #[test]
+    fn parse_cli_combines_skill_with_root() {
+        let cli = parse_cli_args(&["--skill".into(), "--root".into(), "C:\\repo".into()])
+            .expect("parse should succeed");
+        assert!(cli.install_skill);
+        assert_eq!(cli.root, Some(PathBuf::from("C:\\repo")));
+    }
+
+    #[test]
+    fn install_skill_writes_to_root_subdir() {
+        use super::install_skill;
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let target = install_skill(Some(dir.path())).expect("install should succeed");
+
+        let expected = dir.path().join(super::SKILL_RELATIVE_PATH);
+        assert_eq!(target, expected);
+        assert!(expected.exists(), "skill file should exist on disk");
+
+        let content = std::fs::read_to_string(&expected).expect("read skill");
+        assert!(content.contains("# AdvWiki Memory"));
+        assert!(content.contains("name: advwiki-memory"));
+    }
+
+    #[test]
+    fn install_skill_overwrites_existing_file() {
+        use super::install_skill;
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let target = dir.path().join(super::SKILL_RELATIVE_PATH);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "stale content").unwrap();
+
+        install_skill(Some(dir.path())).expect("install should succeed");
+
+        let content = std::fs::read_to_string(&target).expect("read skill");
+        assert!(!content.contains("stale content"));
+        assert!(content.contains("# AdvWiki Memory"));
     }
 
     #[test]

@@ -67,18 +67,28 @@ use them as inline body links.
 
 ## Available AdvWiki tools
 
-Use the actual MCP tools exposed by AdvWiki:
+- `query_wiki` — BM25 search (`maxPages` default 10, `includeRawReferences` default false).
+- `read_knowledge_uri` / `resources/read` — read one `wiki://...` / `raw://...` URI.
+- `update_page` — create or update; `mode` is `overwrite` or `append`.
+- `propose_page_update` — returns `proposal_id` + unified diff; show the diff to the user before applying.
+- `apply_page_update` — apply by `proposalId`; refuses if the page changed since (re-checked via MD5); pass `force: true` to override.
+- `ingest_source` / `ingest_extracted_content` — store raw evidence. `source_id` is MD5 of the URI (stable); re-ingest the same URI needs `force: true`.
+- `delete_page`, `delete_raw_source` — remove content; include `rationale` (logged).
+- `list_pages_by_project`, `list_pages_by_type`, `list_pages_by_tag` — browse by frontmatter.
+- `find_pages_without_sources` — audit pages with no `sources` field.
+- `wiki_graph` (`format`: `summary` | `full` | `mermaid`), `backlinks`, `orphans`, `related_pages`, `link_suggestions` — navigation.
+- `find_claims`, `find_claims_without_source`, `find_conflicting_claims` — inspect claims.
+- `verify_claim` — re-validate a claim; `claimIndex` is **1-based**.
+- `lint_wiki` — required `scope`: `quick` for everyday hygiene, `all` for full audit (adds stale pages, decisions without rationale, near-duplicates).
+- `rebuild_wiki_index` — regenerate `wiki://page/index` after bulk imports or reorganizations.
 
-- `query_wiki` — search relevant wiki pages before answering.
-- `read_knowledge_uri` / `resources/read` — read a known `wiki://...` URI.
-- `update_page` — create or update curated pages.
-- `propose_page_update` — prepare a reviewable diff without writing.
-- `apply_page_update` — apply a previously proposed update.
-- `ingest_extracted_content` / `ingest_source` — store raw or semi-raw evidence.
-- `list_pages_by_project`, `list_pages_by_type`, `list_pages_by_tag` — browse pages.
-- `wiki_graph`, `backlinks`, `orphans`, `related_pages`, `link_suggestions` — inspect navigation.
-- `find_claims`, `find_claims_without_source`, `find_conflicting_claims`, `verify_claim` — inspect or verify traceable claims.
-- `lint_wiki`, `rebuild_wiki_index` — maintenance, only when useful or requested.
+### Quick gotchas
+
+- **Slug**: ASCII `[a-zA-Z0-9._-]` only. No spaces, no accents, no `/\:`. Cannot start/end with `.` or end with space. Windows reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`) are rejected.
+- **Auto-managed**: `created_at` and `updated_at` are written by the server on every save — never set them manually.
+- **Not readable**: `wiki://list` and `raw://sources` are documented elsewhere but the server does not route them. Use `resources/list` or `list_pages_by_*` to enumerate.
+- **Transparent**: schema migration to wikilinks runs once on boot (backup + log); primary/secondary instance roles are automatic — no agent action needed.
+- **Bilingual claims**: field labels accept `Source`/`Fonte`, `Confidence`/`Confiança`, `Last verified`/`Última verificação`.
 
 ---
 
