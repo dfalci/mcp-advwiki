@@ -15,11 +15,20 @@
 
 use anyhow::Context;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
+use std::time::Duration;
 use tantivy::collector::TopDocs;
+use tantivy::directory::error::LockError;
 use tantivy::query::{AllQuery, BooleanQuery, Occur, Query, QueryParser, TermQuery};
 use tantivy::schema::*;
-use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term, doc};
+use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, TantivyError, Term, doc};
+
+/// Tamanho do buffer de memória do `IndexWriter` (50 MB).
+const WRITER_BUFFER_BYTES: usize = 50_000_000;
+
+/// Delays em milissegundos para as tentativas de adquirir o writer no startup.
+/// Cobre o cenário de duas instâncias subindo quase ao mesmo tempo.
+const WRITER_ACQUIRE_RETRY_DELAYS_MS: &[u64] = &[100, 250, 500];
 
 // rstruturas de dados
 
@@ -65,12 +74,32 @@ fn escape_for_tantivy(query: &str) -> String {
     escaped
 }
 
+/// Papel da instância em relação ao índice.
+///
+/// Tantivy mantém um lock cross-process exclusivo no `IndexWriter`.
+/// Apenas uma instância (primary) pode escrever; as demais (secondary)
+/// ficam em modo somente-leitura e podem ser promovidas se a primary cair.
+enum WriterMode {
+    /// Instância detém o writer e é responsável por indexar.
+    Primary(IndexWriter),
+    /// Outro processo detém o writer; escritas viram no-op.
+    Secondary,
+}
+
 /// motor de busca da Wiki baseado em Tantivy.
 ///
 /// # Thread safety
 ///
-/// - `IndexWriter` é `Send` mas não `Sync` — protegido por `Arc<Mutex<>>`.
+/// - `IndexWriter` é `Send` mas não `Sync` — protegido pelo `Mutex<WriterMode>`.
 /// - `IndexReader` é `Send + Sync + Clone` — leituras concorrentes sem lock.
+///
+/// # Concorrência entre processos
+///
+/// Apenas uma instância por diretório de índice pode segurar o writer
+/// (lock exclusivo do Tantivy). Outras instâncias entram em modo
+/// `Secondary`: leem normalmente (o reader vê os commits da primary via
+/// `ReloadPolicy::OnCommitWithDelay`) e podem ser promovidas a primary
+/// chamando [`Self::try_promote_to_primary`] quando a primary atual cai.
 pub struct WikiSearchEngine {
     /// Índice Tantivy em disco.
     index: Index,
@@ -78,8 +107,8 @@ pub struct WikiSearchEngine {
     index_path: PathBuf,
     /// Handles para os campos do schema (mesmos IDs do índice).
     fields: Fields,
-    /// Writer com acesso exclusivo (mutex).
-    writer: Arc<Mutex<IndexWriter>>,
+    /// Papel da instância (Primary com writer / Secondary sem writer).
+    mode: Mutex<WriterMode>,
     /// Reader para buscas concorrentes.
     reader: IndexReader,
 }
@@ -129,6 +158,35 @@ impl Fields {
 }
 
 
+/// Tenta adquirir o `IndexWriter` com retries em caso de lock ocupado.
+///
+/// Retorna `Some(writer)` se conseguir, ou `None` se todas as tentativas
+/// falharam por `LockBusy` (ou se ocorreu outro erro — neste caso é logado).
+/// O cooldown entre tentativas vem de `delays_ms` e não dorme depois da última.
+fn try_acquire_writer(index: &Index, delays_ms: &[u64]) -> Option<IndexWriter> {
+    let last_idx = delays_ms.len().saturating_sub(1);
+    for (attempt, delay_ms) in delays_ms.iter().enumerate() {
+        match index.writer(WRITER_BUFFER_BYTES) {
+            Ok(writer) => return Some(writer),
+            Err(TantivyError::LockFailure(LockError::LockBusy, _)) => {
+                if attempt < last_idx {
+                    tracing::debug!(
+                        attempt = attempt + 1,
+                        delay_ms,
+                        "writer lock ocupado; aguardando antes de tentar novamente"
+                    );
+                    std::thread::sleep(Duration::from_millis(*delay_ms));
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "erro inesperado ao abrir writer; assumindo secondary");
+                return None;
+            }
+        }
+    }
+    None
+}
+
 impl WikiSearchEngine {
     /// abre um indice existente ou cria um novo no caminho especificado.
     /// O diretório de índice é criado automaticamente se não existir.
@@ -161,31 +219,79 @@ impl WikiSearchEngine {
                 .with_context(|| format!("Falha ao criar índice em: {}", index_path.display()))?
         };
 
-        // writer com 50 MB de buffer de RAM
-        let writer = index
-            .writer(50_000_000)
-            .context("Falha ao criar IndexWriter")?;
-        let writer = Arc::new(Mutex::new(writer));
+        // Tenta adquirir o writer com retries curtos. Se outra instância
+        // já segura o lock cross-process do Tantivy, entra em modo
+        // Secondary (somente leitura) e pode ser promovida depois.
+        let mode = match try_acquire_writer(&index, WRITER_ACQUIRE_RETRY_DELAYS_MS) {
+            Some(writer) => {
+                tracing::info!(
+                    path = %index_path.display(),
+                    role = "primary",
+                    "Índice Tantivy inicializado"
+                );
+                WriterMode::Primary(writer)
+            }
+            None => {
+                tracing::info!(
+                    path = %index_path.display(),
+                    role = "secondary",
+                    "Índice Tantivy inicializado em modo somente-leitura \
+                     (outra instância detém o writer)"
+                );
+                WriterMode::Secondary
+            }
+        };
 
-        // reader para buscas concorrentes
+        // Reader para buscas concorrentes. `OnCommitWithDelay` permite que
+        // uma instância Secondary enxergue commits feitos pela Primary.
         let reader = index
             .reader_builder()
-            .reload_policy(ReloadPolicy::Manual)
+            .reload_policy(ReloadPolicy::OnCommitWithDelay)
             .try_into()
             .context("Falha ao criar IndexReader")?;
-
-        tracing::info!(
-            path = %index_path.display(),
-            "Índice Tantivy inicializado"
-        );
 
         Ok(Self {
             index,
             index_path,
             fields,
-            writer,
+            mode: Mutex::new(mode),
             reader,
         })
+    }
+
+    /// Retorna `true` se esta instância detém o writer (papel primary).
+    pub fn is_primary(&self) -> bool {
+        matches!(*self.mode.lock().unwrap(), WriterMode::Primary(_))
+    }
+
+    /// Tenta promover esta instância de Secondary para Primary.
+    ///
+    /// Adquire o writer do Tantivy sem retry — chamado periodicamente
+    /// pelo loop de failover. Retorna `true` se a instância está em modo
+    /// Primary após a chamada (já estava, ou acabou de ser promovida).
+    pub fn try_promote_to_primary(&self) -> bool {
+        let mut mode = self.mode.lock().unwrap();
+        if matches!(*mode, WriterMode::Primary(_)) {
+            return true;
+        }
+        match self.index.writer(WRITER_BUFFER_BYTES) {
+            Ok(writer) => {
+                tracing::info!(
+                    path = %self.index_path.display(),
+                    "Writer adquirido — instância promovida a primary"
+                );
+                *mode = WriterMode::Primary(writer);
+                true
+            }
+            Err(TantivyError::LockFailure(LockError::LockBusy, _)) => false,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Erro ao tentar promover instância a primary"
+                );
+                false
+            }
+        }
     }
 
     /// retorna o caminho do diretório do índice.
@@ -213,7 +319,14 @@ impl WikiSearchEngine {
         last_modified: i64,
     ) -> anyhow::Result<()> {
         let fields = &self.fields;
-        let mut writer = self.writer.lock().unwrap();
+        let mut mode = self.mode.lock().unwrap();
+        let writer = match &mut *mode {
+            WriterMode::Primary(w) => w,
+            WriterMode::Secondary => {
+                tracing::trace!(uri, "secondary: ignorando index_document (primary indexará)");
+                return Ok(());
+            }
+        };
 
         // remove documento existente com a mesma URI (upsert)
         let uri_term = Term::from_field_text(fields.uri, uri);
@@ -242,7 +355,14 @@ impl WikiSearchEngine {
     /// remove um documento do índice pela URI.
     pub fn delete_document(&self, uri: &str) -> anyhow::Result<()> {
         let fields = &self.fields;
-        let mut writer = self.writer.lock().unwrap();
+        let mut mode = self.mode.lock().unwrap();
+        let writer = match &mut *mode {
+            WriterMode::Primary(w) => w,
+            WriterMode::Secondary => {
+                tracing::trace!(uri, "secondary: ignorando delete_document (primary removerá)");
+                return Ok(());
+            }
+        };
 
         let uri_term = Term::from_field_text(fields.uri, uri);
         writer.delete_term(uri_term);
@@ -257,7 +377,14 @@ impl WikiSearchEngine {
 
     /// roda o clear no índice, removendo todos os documentos.
     pub fn clear(&self) -> anyhow::Result<()> {
-        let mut writer = self.writer.lock().unwrap();
+        let mut mode = self.mode.lock().unwrap();
+        let writer = match &mut *mode {
+            WriterMode::Primary(w) => w,
+            WriterMode::Secondary => {
+                tracing::trace!("secondary: ignorando clear (primary cuida do índice)");
+                return Ok(());
+            }
+        };
         writer.delete_all_documents()?;
         writer.commit()?;
         Ok(())
@@ -269,7 +396,14 @@ impl WikiSearchEngine {
     /// cada tupla contém `(kind, uri, title, content, last_modified)`.
     pub fn index_bulk(&self, documents: &[(DocumentKind, String, String, String, i64)]) -> anyhow::Result<u64> {
         let fields = &self.fields;
-        let mut writer = self.writer.lock().unwrap();
+        let mut mode = self.mode.lock().unwrap();
+        let writer = match &mut *mode {
+            WriterMode::Primary(w) => w,
+            WriterMode::Secondary => {
+                tracing::trace!("secondary: ignorando index_bulk (primary indexará)");
+                return Ok(0);
+            }
+        };
         let mut count = 0u64;
 
         for (kind, uri, title, content, last_modified) in documents {
@@ -623,6 +757,109 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].uri, "wiki://page/alpha");
+    }
+
+    #[test]
+    fn test_first_instance_is_primary_second_is_secondary() {
+        let dir = TempDir::new().unwrap();
+        let index_path = dir.path().join("idx_two_instances");
+
+        let primary = WikiSearchEngine::new(index_path.clone()).unwrap();
+        assert!(primary.is_primary(), "primeira instância deve ser primary");
+
+        let secondary = WikiSearchEngine::new(index_path.clone()).unwrap();
+        assert!(!secondary.is_primary(), "segunda instância deve ser secondary");
+    }
+
+    #[test]
+    fn test_secondary_writes_are_noop_but_reads_see_primary_commits() {
+        let dir = TempDir::new().unwrap();
+        let index_path = dir.path().join("idx_secondary_reads");
+
+        let primary = WikiSearchEngine::new(index_path.clone()).unwrap();
+        let secondary = WikiSearchEngine::new(index_path.clone()).unwrap();
+        assert!(primary.is_primary());
+        assert!(!secondary.is_primary());
+
+        primary
+            .index_document(
+                DocumentKind::Page,
+                "wiki://page/shared",
+                "Shared",
+                "Conteúdo da primary visível pra secondary",
+                1000,
+            )
+            .unwrap();
+
+        // Secondary tenta indexar — deve ser no-op e retornar Ok.
+        secondary
+            .index_document(
+                DocumentKind::Page,
+                "wiki://page/ignored",
+                "Ignored",
+                "Esta escrita do secondary deve ser ignorada",
+                2000,
+            )
+            .unwrap();
+
+        // Reader do secondary vê o que a primary commitou.
+        let visible = secondary.search("visível", 5).unwrap();
+        assert_eq!(visible.len(), 1, "secondary deve enxergar commit da primary");
+        assert_eq!(visible[0].uri, "wiki://page/shared");
+
+        // E NÃO vê o que ele mesmo "tentou" indexar.
+        let ignored = secondary.search("ignorada", 5).unwrap();
+        assert!(ignored.is_empty(), "escrita do secondary deve ter sido no-op");
+    }
+
+    #[test]
+    fn test_secondary_can_be_promoted_after_primary_drops() {
+        let dir = TempDir::new().unwrap();
+        let index_path = dir.path().join("idx_promotion");
+
+        let primary = WikiSearchEngine::new(index_path.clone()).unwrap();
+        let secondary = WikiSearchEngine::new(index_path.clone()).unwrap();
+
+        // Antes da primary cair, promoção falha.
+        assert!(!secondary.try_promote_to_primary());
+        assert!(!secondary.is_primary());
+
+        // Primary cai (drop libera o lock cross-process do Tantivy).
+        drop(primary);
+
+        // Após drop, secondary consegue se promover.
+        assert!(
+            secondary.try_promote_to_primary(),
+            "secondary deve conseguir adquirir o writer após primary cair"
+        );
+        assert!(secondary.is_primary());
+
+        // E agora consegue escrever de verdade.
+        secondary
+            .index_document(
+                DocumentKind::Page,
+                "wiki://page/post_promotion",
+                "Promoted",
+                "Conteúdo indexado após promoção",
+                3000,
+            )
+            .unwrap();
+
+        let results = secondary.search("promoção", 5).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].uri, "wiki://page/post_promotion");
+    }
+
+    #[test]
+    fn test_try_promote_is_idempotent_on_primary() {
+        let dir = TempDir::new().unwrap();
+        let index_path = dir.path().join("idx_idempotent");
+
+        let primary = WikiSearchEngine::new(index_path).unwrap();
+        assert!(primary.is_primary());
+        // Chamar try_promote num primary não quebra nem perde o writer.
+        assert!(primary.try_promote_to_primary());
+        assert!(primary.is_primary());
     }
 
     #[test]

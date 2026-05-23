@@ -12,6 +12,12 @@ mod watcher;
 use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Intervalo entre tentativas de promoção quando a instância está em modo Secondary.
+/// Trade-off: muito curto = log/CPU desnecessários; muito longo = atraso pra
+/// assumir o índice depois que a primary cai.
+const SECONDARY_PROMOTION_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
 const HELP_BANNER: &str = concat!(
     r#"
@@ -192,29 +198,80 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "Índice de busca inicializado"
     );
 
-    //reindexa conteúdo já existente no disco
-    rebuild_index(&wiki, &search_engine).await?;
-
-    //inicializa o file watcher
-    let (mut event_rx, _watcher) = watcher::WikiWatcher::start(
-        wiki.root().to_path_buf(),
-    )?;
-    tracing::info!("File watcher iniciado");
-
-    //task de consumo de eventos do watcher... atualização do índice
-    let search_clone = search_engine.clone();
-    let wiki_clone = wiki.clone();
-    tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            handle_wiki_event(&search_clone, &wiki_clone, event).await;
-        }
-    });
+    // Conforme o papel detectado pelo engine: a primary assume o índice
+    // imediatamente; a secondary fica polling até a primary cair.
+    if search_engine.is_primary() {
+        let wiki_clone = wiki.clone();
+        let engine_clone = search_engine.clone();
+        tokio::spawn(async move {
+            if let Err(e) = run_primary_role(wiki_clone, engine_clone).await {
+                tracing::error!(error = %e, "Falha ao executar papel de primary");
+            }
+        });
+    } else {
+        let wiki_clone = wiki.clone();
+        let engine_clone = search_engine.clone();
+        tokio::spawn(async move {
+            run_secondary_with_failover(wiki_clone, engine_clone).await;
+        });
+    }
 
     //inicia o servidor MCP (blockado.. escuta stdin/stdout)
     let server = mcp_server::AdvWikiMcpServer::new(wiki, search_engine);
     server.run().await?;
 
     Ok(())
+}
+
+/// Executa as responsabilidades da instância primary: rebuild inicial do índice
+/// e consumo de eventos do file watcher.
+///
+/// Roda enquanto o watcher mantiver o canal aberto. Se o watcher falhar ao
+/// iniciar, retorna erro; se o canal fechar (ex: drop do watcher), retorna Ok.
+async fn run_primary_role(
+    wiki: Arc<storage::WikiFileManager>,
+    engine: Arc<search::WikiSearchEngine>,
+) -> anyhow::Result<()> {
+    rebuild_index(&wiki, &engine).await?;
+
+    let (mut event_rx, _watcher) = watcher::WikiWatcher::start(wiki.root().to_path_buf())?;
+    tracing::info!("File watcher iniciado");
+
+    while let Some(event) = event_rx.recv().await {
+        handle_wiki_event(&engine, &wiki, event).await;
+    }
+
+    tracing::info!("Loop de eventos do watcher encerrado");
+    Ok(())
+}
+
+/// Polling em background para que a instância Secondary assuma o papel de
+/// Primary caso a primary atual caia (libera o writer lock do Tantivy).
+///
+/// Roda indefinidamente até a promoção ser bem-sucedida; após promover,
+/// transfere o controle pra `run_primary_role`.
+async fn run_secondary_with_failover(
+    wiki: Arc<storage::WikiFileManager>,
+    engine: Arc<search::WikiSearchEngine>,
+) {
+    tracing::info!(
+        poll_interval_s = SECONDARY_PROMOTION_POLL_INTERVAL.as_secs(),
+        "Modo secondary: aguardando para assumir o papel de primary"
+    );
+
+    loop {
+        tokio::time::sleep(SECONDARY_PROMOTION_POLL_INTERVAL).await;
+
+        if engine.try_promote_to_primary() {
+            tracing::info!("Promovido a primary — assumindo controle do índice");
+            if let Err(e) = run_primary_role(wiki, engine).await {
+                tracing::error!(error = %e, "Falha ao executar papel de primary após promoção");
+            }
+            return;
+        }
+
+        tracing::debug!("Tentativa de promoção falhou; continua em modo secondary");
+    }
 }
 
 #[cfg(test)]
