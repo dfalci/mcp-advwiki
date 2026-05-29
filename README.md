@@ -60,6 +60,20 @@ mcp-advwiki --root /path/to/project
 
 If you omit `--root`, AdvWiki keeps the current behavior and uses the current working directory of the process.
 
+### Running inside claude
+
+To use AdvWiki as a tool inside Claude, you first need to install the bundled skill (see the [Skills](#skills-and-the-learning-process) section below). 
+
+The next step is to add the server to your `claude_desktop_config.json`: 
+
+```bash
+cd <your project folder>
+mcp-advwiki --skill
+claude mcp add mcp-advwiki -- mcp-advwiki
+```
+
+Now you're good to go
+
 ### Build from source (optional)
 
 If you prefer building everything yourself...
