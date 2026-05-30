@@ -1,32 +1,34 @@
-# AdvWiki — a local wiki with search, made for AIs
+# AdvWiki — persistent project memory for AI coding assistants
 
-AdvWiki is an [MCP](https://modelcontextprotocol.io) server that puts a local wiki right on your AI agent's desk. It runs over `stdio` with JSON-RPC 2.0 and was thought out to run inside clients like openclaude, deepseek, codex cli and others...
+AdvWiki is an [MCP](https://modelcontextprotocol.io) server that gives an AI coding assistant a file-backed, searchable knowledge base for a software project. It runs over `stdio` with JSON-RPC 2.0 and works with any MCP client (Claude, Codex CLI, and others).
 
-Under the hood, it uses [Tantivy](https://github.com/quickwit-oss/tantivy) for full-text search with BM25 — the same algorithm that powers Elasticsearch and Lucene. Everything runs locally, no external server, no embedding, no third-party APIs.
+The problem it targets is specific to working with an AI on a codebase: the assistant loses everything it learned the moment the session ends. The cause of a race condition you spent an afternoon diagnosing, why service A talks to service B over a queue instead of HTTP, which config flag breaks staging — none of it carries over. Next session you explain it again. AdvWiki keeps that knowledge in Markdown files on disk and exposes full-text search over them, so the assistant retrieves what's already known instead of being re-told.
 
-Implementation from Karpathy's gist at https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f
+Search uses [Tantivy](https://github.com/quickwit-oss/tantivy) (BM25, the ranking model behind Lucene and Elasticsearch). Everything runs locally — no external server, no embeddings, no third-party APIs.
 
 ---
 
 ## Why does this exist?
 
-### The ephemeral memory problem
+### Context windows don't persist
 
-When you chat with an AI, it operates within a context window. Everything you sent in the last messages is right there... but when the session ends or the context gets full, that stuff vanishes. It doesn't matter how much the AI "learned" about your project in that chat: on the next one, it starts from zero.
+An AI assistant operates inside a context window. What you sent in the last messages is available; once the session ends or the window fills up, it's gone. Whatever the assistant worked out about the project during that session doesn't carry into the next one — it starts from zero.
 
-AdvWiki solves this by keeping knowledge in Markdown files that survive any session. The AI doesn't need to remember... it just looks it up.
+AdvWiki keeps the knowledge in Markdown files that outlive the session. The assistant doesn't need to remember; it queries the wiki.
 
-This is also different from searching in a project's local memory which tends to get huge and outdated. By using this kind of service, the documentation is alive, editable, and the search is fast and relevant.
+This is also distinct from a single growing memory file, which tends to bloat and go stale. Here the content is editable Markdown, and retrieval is a ranked search rather than dumping the whole file into the prompt.
 
-### Microservices and scattered documentation
+### Knowledge scattered across services
 
-In multi-service architectures, system knowledge gets fragmented. Each service has its own repo, its own docs, its own logs. A new dev on the team or an AI trying to help needs to hunt for info in five different places before being able to answer a simple question.
+In a multi-service codebase, the information needed to answer one question is spread out: each service has its own repo, its own docs, its own logs. A new developer — or an assistant trying to help — has to look in several places before answering something basic.
 
-AdvWiki serves as a single point of reference. You just toss documentation pages, processed logs, API specs, and decision notes into the wiki, and the BM25 search finds what matters in milliseconds. For the AI consuming the MCP, this means a question like _"which service handles authentication?"_ can be answered with a search + read, without anyone needing to open five repos.
+AdvWiki acts as one reference point. You add documentation pages, processed logs, API specs, and decision notes; BM25 search ranks them on query. A question like _"which service handles authentication?"_ becomes a search plus a read, instead of opening five repos.
 
-### A second brain for the project
+### Accumulated, not just remembered
 
-Think of AdvWiki as a persistence layer between you and the AI. Everything the AI discovers about the code, every architectural decision you guys discuss, every bug that was hard-diagnosed, you register in the wiki. Next chat, the AI looks it up and picks up right where it left off. It's not short-term memory nor a garbage dump of memory. It's accumulated knowledge.
+AdvWiki sits as a persistence layer between you and the assistant. What the assistant figures out about the code, the architectural decisions made during a session, a bug that was hard to track down — those get written to the wiki. The next session reads them back. It isn't short-term context and it isn't an undifferentiated dump; it's knowledge that accumulates and stays queryable.
+
+For the workflow this is meant to support — the assistant reading the index, searching for relevant context, doing the work, then recording what it learned — see [Skills and the learning process](#skills-and-the-learning-process).
 
 ---
 
@@ -208,7 +210,7 @@ Pages without a frontmatter block are fully supported — the fields are all opt
 
 AdvWiki has four main pieces that talk to each other:
 
-### The watcher — eyes on the filesystem
+### The watcher — filesystem events
 
 There's a module (`watcher.rs`) that monitors the wiki directories using the `notify` crate. Every time you create, edit, or remove a `.md` file inside `.advwiki/pages/`, the watcher notices and sends an event through the internal channel.
 
@@ -218,7 +220,7 @@ Same thing for _raw sources_ ... raw files you've indexed (logs, CSVs, API JSONs
 
 The `search.rs` module maintains a Tantivy index in `.advwiki/index/`. Whenever a new page event arrives, the index gets updated. Tantivy tokenizes the text and keeps the search structures ready to go.
 
-When the AI asks _"search for 'JWT authentication'"_, AdvWiki isn't doing a grep... it's running a search ranked by statistical relevance. BM25 weighs term frequency, rarity in the corpus, and document size. The result: the most relevant page pops up first.
+When the AI asks _"search for 'JWT authentication'"_, AdvWiki isn't doing a grep — it's running a search ranked by statistical relevance. BM25 weighs term frequency, rarity in the corpus, and document length, so the most relevant page ranks first.
 
 ### The MCP server — the bridge to the AI
 
@@ -229,7 +231,7 @@ The `mcp_server.rs` module implements the MCP protocol over stdin/stdout. It exp
 
 Everything via JSON-RPC 2.0, just like the MCP spec says.
 
-### The storage — everything in its right place
+### The storage — directory layout
 
 The `storage.rs` module manages the directory structure in `.advwiki/` under the selected project root:
 
@@ -265,7 +267,7 @@ In practice, the flow goes like:
 5. The AI reads the full pages via `read_resource`
 6. Answers based on real content, not on what it "remembers" or hallucinates
 
-This is super handy when the project code is too big to fit in a system prompt or a simple memory. Instead of trying to cram 200 files into the prompt, you document the important parts in the wiki and let the search do the heavy lifting of filtering it all out.
+This matters when the project is too big to fit in a system prompt or a single memory file. Instead of pushing 200 files into the prompt, you document the parts that matter in the wiki and let search narrow it down at query time.
 
 ---
 
@@ -316,9 +318,9 @@ Only the last row affects what Obsidian renders. Everything else is JSON-RPC plu
 
 ## Skills and the learning process
 
-One of the coolest ideas about AdvWiki is using it together with a **Skill** — an instruction file that guides the AI's behavior.
+AdvWiki is meant to be used together with a **Skill** — an instruction file that guides how the AI uses the wiki: when to search before answering, when to write back what it learned, how to structure pages.
 
-Check the skills directory. We offer a baseline skill that teaches the AI how to use the wiki effectively. You can customize it or create your own.
+The repository ships a baseline skill (`advwiki-memory`) that covers this. You can customize it or write your own.
 
 ### Installing the bundled skill
 
@@ -433,6 +435,12 @@ The AI has access to these MCP tools (names match what `tools/list` returns):
 - **read_knowledge_uri** — reads any logical URI (`wiki://page/{slug}`, `wiki://log`, `wiki://index`, `wiki://rawindex`, `raw://source/{id}`, `raw://sourcemetadata/{id}`). Args: `uri`.
 
 Passive reads (page list, log, raw sources, metadata) are also available through MCP **resources** via `resources/list` and `resources/read` — no tool call required for plain reads.
+
+---
+
+## Origin
+
+The original idea comes from Andrej Karpathy's [gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) on giving an AI a searchable wiki as memory. AdvWiki is an implementation of that idea as a standalone MCP server.
 
 ---
 
