@@ -210,6 +210,12 @@ fn classify_single_path_event(
     if path_is_in(path, &pages_dir) {
         return extract_slug(path, &pages_dir).map(|slug| match kind {
             EventKind::Create(_) => WikiEvent::PageCreated { slug },
+            // Renomeações single-path: a plataforma pode emitir `From`/`To` em
+            // eventos separados (1 path cada). `From` = origem que sumiu (delete);
+            // `To` = destino que apareceu (create). Sem estes arms, ambos cairiam
+            // em `Modify(_)` → PageUpdated, deixando a entrada antiga órfã no índice.
+            EventKind::Modify(ModifyKind::Name(RenameMode::From)) => WikiEvent::PageDeleted { slug },
+            EventKind::Modify(ModifyKind::Name(RenameMode::To)) => WikiEvent::PageCreated { slug },
             EventKind::Modify(_) => WikiEvent::PageUpdated { slug },
             EventKind::Remove(_) => WikiEvent::PageDeleted { slug },
             _ => WikiEvent::Unknown(format!(
@@ -230,6 +236,10 @@ fn classify_single_path_event(
     if path_is_in(path, &sources_dir) || path_is_in(path, &metadata_dir) {
         return Some(match extract_source_id(path, &sources_dir, &metadata_dir) {
             Some(source_id) => match kind {
+                // Mesma lógica das páginas: `From` single-path é remoção.
+                EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
+                    WikiEvent::RawSourceDeleted { source_id }
+                }
                 EventKind::Create(_) | EventKind::Modify(_) => {
                     WikiEvent::RawSourceUpdated { source_id }
                 }
@@ -603,6 +613,53 @@ mod tests {
                     source_id: "new-id".into(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn test_classify_single_path_rename_from_is_delete() {
+        // Renomeação emitida como evento single-path `From` deve virar Delete,
+        // não Update (senão a entrada antiga fica órfã no índice).
+        let root = PathBuf::from("/root");
+        let wiki_dir = root.join(".advwiki");
+
+        let page = wiki_dir.join("pages/old-page.md");
+        assert_eq!(
+            classify_single_path_event(
+                &page,
+                &EventKind::Modify(ModifyKind::Name(RenameMode::From)),
+                &root,
+                &wiki_dir
+            ),
+            Some(WikiEvent::PageDeleted { slug: "old-page".into() })
+        );
+
+        let raw = wiki_dir.join("sources/old-id");
+        assert_eq!(
+            classify_single_path_event(
+                &raw,
+                &EventKind::Modify(ModifyKind::Name(RenameMode::From)),
+                &root,
+                &wiki_dir
+            ),
+            Some(WikiEvent::RawSourceDeleted { source_id: "old-id".into() })
+        );
+    }
+
+    #[test]
+    fn test_classify_single_path_rename_to_is_create() {
+        let root = PathBuf::from("/root");
+        let wiki_dir = root.join(".advwiki");
+
+        let page = wiki_dir.join("pages/new-page.md");
+        assert_eq!(
+            classify_single_path_event(
+                &page,
+                &EventKind::Modify(ModifyKind::Name(RenameMode::To)),
+                &root,
+                &wiki_dir
+            ),
+            Some(WikiEvent::PageCreated { slug: "new-page".into() })
         );
     }
 

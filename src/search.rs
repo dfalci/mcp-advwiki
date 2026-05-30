@@ -510,16 +510,12 @@ impl WikiSearchEngine {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
-            // Snippet: primeiros 300 caracteres do conteúdo
-            let snippet = if full_content.len() > 300 {
-                let end = full_content
-                    .char_indices()
-                    .nth(300)
-                    .map(|(i, _)| i)
-                    .unwrap_or(full_content.len());
-                format!("{}...", &full_content[..end])
-            } else {
-                full_content.to_string()
+            // Snippet: primeiros 300 caracteres do conteúdo. Trunca por contagem
+            // de caracteres (não bytes), e só anexa "..." quando de fato corta —
+            // conteúdo multibyte com >300 bytes mas ≤300 chars não é truncado.
+            let snippet = match full_content.char_indices().nth(300) {
+                Some((end, _)) => format!("{}...", &full_content[..end]),
+                None => full_content.to_string(),
             };
 
             results.push(SearchResult {
@@ -723,6 +719,23 @@ mod tests {
         assert!(results[0].snippet.ends_with("..."));
         // Snippet deve ter no máximo ~303 caracteres (300 + "...")
         assert!(results[0].snippet.len() <= 303);
+    }
+
+    #[test]
+    fn test_snippet_multibyte_under_300_chars_not_truncated() {
+        let (engine, _dir) = test_engine();
+
+        // 200 caracteres acentuados (2 bytes cada em UTF-8) → 400 bytes, mas
+        // só 200 chars: NÃO deve ser truncado nem ganhar "...".
+        let content = "á".repeat(200);
+        engine
+            .index_document(DocumentKind::Page, "wiki://page/mb", "MB", &content, 1000)
+            .unwrap();
+
+        let results = engine.search("MB", 5).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].snippet.ends_with("..."));
+        assert_eq!(results[0].snippet.chars().count(), 200);
     }
 
     #[test]

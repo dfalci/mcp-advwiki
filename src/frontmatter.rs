@@ -79,11 +79,15 @@ pub fn strip_frontmatter(content: &str) -> &str {
 /// se `is_new_page` for verdadeiro e `created_at` não existir, também o injeta.
 /// se não houver frontmatter no conteúdo, retorna o conteúdo sem alterações.
 pub fn update_date_fields(content: &str, today: &str, is_new_page: bool) -> String {
-    let Some((fm_body, rest)) = split_frontmatter(content) else {
-        return content.to_string();
+    // Quando o conteúdo não tem frontmatter, injeta um bloco novo no topo
+    // (corpo vazio + conteúdo original como `rest`). Assim o servidor sempre
+    // grava as datas, honrando o contrato "auto-managed dates on every save".
+    let (fm_body, rest): (String, &str) = match split_frontmatter(content) {
+        Some((body, rest)) => (body.to_string(), rest),
+        None => (String::new(), content),
     };
 
-    let fm_body = upsert_scalar(fm_body, "updated_at", today);
+    let fm_body = upsert_scalar(&fm_body, "updated_at", today);
 
     let fm_body = if is_new_page && !has_key(&fm_body, "created_at") {
         upsert_scalar(&fm_body, "created_at", today)
@@ -335,18 +339,37 @@ mod tests {
     }
 
     #[test]
-    fn test_update_date_fields_no_frontmatter_unchanged() {
-        let content = "# Título\n\nSem frontmatter.";
+    fn test_update_date_fields_thematic_break_gets_frontmatter_injected() {
+        // Conteúdo que começa com thematic break NÃO é frontmatter válido, então
+        // um bloco novo é injetado no topo e o conteúdo original vira o corpo.
+        let content = "---\n\n## Intro\n\nTexto.\n\n---\n\n## Seção 2";
         let result = update_date_fields(content, "2026-05-15", false);
-        assert_eq!(result, content);
+        assert!(result.starts_with("---\nupdated_at: \"2026-05-15\"\n---\n"));
+        assert!(result.ends_with(content));
+        // Re-parse é estável: a data fica acessível e o corpo continua intacto.
+        let fm = parse_frontmatter(&result).unwrap();
+        assert_eq!(fm.updated_at.as_deref(), Some("2026-05-15"));
+        assert_eq!(strip_frontmatter(&result), content);
     }
 
     #[test]
-    fn test_update_date_fields_thematic_break_unchanged() {
-        // página pré-existente com linha horizontal — NÃO deve ser modificada
-        let content = "---\n\n## Intro\n\nTexto.\n\n---\n\n## Seção 2";
+    fn test_update_date_fields_injects_block_when_no_frontmatter() {
+        // Página nova sem frontmatter: injeta created_at + updated_at.
+        let content = "# Só um título\n\nsem frontmatter";
+        let result = update_date_fields(content, "2026-05-15", true);
+        assert!(result.contains("updated_at: \"2026-05-15\""));
+        assert!(result.contains("created_at: \"2026-05-15\""));
+        assert!(result.ends_with(content));
+    }
+
+    #[test]
+    fn test_update_date_fields_no_frontmatter_existing_page_only_updated_at() {
+        // Página existente sem frontmatter (is_new_page=false): só updated_at.
+        let content = "# Título\n\ncorpo";
         let result = update_date_fields(content, "2026-05-15", false);
-        assert_eq!(result, content);
+        assert!(result.contains("updated_at: \"2026-05-15\""));
+        assert!(!result.contains("created_at"));
+        assert!(result.ends_with(content));
     }
 
     #[test]

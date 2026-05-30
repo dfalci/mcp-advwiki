@@ -550,8 +550,6 @@ impl WikiFileManager {
         original_path: &Option<String>,
         extracted_at: &str,
     ) -> anyhow::Result<()> {
-        let path = self.root.join("rawindex.md");
-
         let mut entries = self.read_raw_index().await.unwrap_or_default();
 
         // Remove entrada existente com mesmo source_id (evita duplicatas)
@@ -565,20 +563,30 @@ impl WikiFileManager {
 
         entries.sort_by(|a, b| a.source_id.cmp(&b.source_id));
 
+        self.write_raw_index(&entries).await
+    }
+
+    /// Serializa e regrava o `rawindex.md` a partir das entradas dadas.
+    ///
+    /// Sanitiza `|` e quebras de linha em `original_path` (campo livre) para
+    /// preservar o formato pipe-delimitado de uma entrada por linha — sem isso,
+    /// um caminho com `|` desloca os campos no `read_raw_index`.
+    async fn write_raw_index(&self, entries: &[RawIndexEntry]) -> anyhow::Result<()> {
+        let path = self.root.join("rawindex.md");
+
         let mut content = String::from("# AdvWiki - Índice Principal\n\n");
-        for e in &entries {
-            let original = e.original_path.as_deref().unwrap_or("-");
-            content.push_str(&format!(
-                "{} | {} | {}\n",
-                e.source_id, original, e.extracted_at
-            ));
+        for e in entries {
+            let original = e
+                .original_path
+                .as_deref()
+                .map(sanitize_index_field)
+                .unwrap_or_else(|| "-".to_string());
+            content.push_str(&format!("{} | {} | {}\n", e.source_id, original, e.extracted_at));
         }
 
         fs::write(&path, content)
             .await
-            .with_context(|| format!("Falha ao regravar rawindex: {}", path.display()))?;
-
-        Ok(())
+            .with_context(|| format!("Falha ao regravar rawindex: {}", path.display()))
     }
 
     /// Exclui uma página da wiki pelo slug.
@@ -625,22 +633,9 @@ impl WikiFileManager {
             .context("Falha ao excluir raw source ou metadados")?;
 
         // Remove a entrada do rawindex.md
-        let path = self.root.join("rawindex.md");
         let mut entries = self.read_raw_index().await.unwrap_or_default();
         entries.retain(|e| e.source_id != source_id);
-
-        let mut content = String::from("# AdvWiki - Índice Principal\n\n");
-        for e in &entries {
-            let original = e.original_path.as_deref().unwrap_or("-");
-            content.push_str(&format!(
-                "{} | {} | {}\n",
-                e.source_id, original, e.extracted_at
-            ));
-        }
-
-        fs::write(&path, content)
-            .await
-            .with_context(|| format!("Falha ao regravar rawindex: {}", path.display()))?;
+        self.write_raw_index(&entries).await?;
 
         tracing::info!(source_id = %source_id, "Raw source excluída");
         Ok(())
@@ -763,6 +758,12 @@ impl WikiFileManager {
     }
 }
 
+/// Substitui caracteres que quebrariam o formato pipe-delimitado de uma linha
+/// do `rawindex.md` (`|` e quebras de linha) por placeholders seguros.
+fn sanitize_index_field(value: &str) -> String {
+    value.replace(['\n', '\r'], " ").replace('|', "%7C")
+}
+
 // ── Testes ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -871,6 +872,32 @@ mod tests {
         assert!(WikiFileManager::validate_slug(".hidden").is_err());
         assert!(WikiFileManager::validate_slug("trailing.").is_err());
         assert!(WikiFileManager::validate_slug("trailing ").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_rawindex_roundtrip_with_pipe_in_original_path() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let wiki = WikiFileManager::new(Some(dir.path().to_path_buf()));
+        wiki.init().await.unwrap();
+
+        let mut meta = RawSourceMetadata::new("src-1".into(), 10);
+        meta.original_path = Some("C:\\a|b\\file.txt".into());
+        wiki.write_raw_source("src-1", &meta, "conteúdo").await.unwrap();
+
+        // O `|` no caminho não pode deslocar os campos: a entrada deve ser
+        // lida de volta com o source_id correto.
+        let entries = wiki.read_raw_index().await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source_id, "src-1");
+        // o `|` foi sanitizado para %7C, então não aparece cru
+        assert!(!entries[0].original_path.as_deref().unwrap_or("").contains('|'));
+    }
+
+    #[test]
+    fn test_sanitize_index_field() {
+        assert_eq!(sanitize_index_field("a|b"), "a%7Cb");
+        assert_eq!(sanitize_index_field("a\nb"), "a b");
+        assert_eq!(sanitize_index_field("normal/path.txt"), "normal/path.txt");
     }
 
     #[test]

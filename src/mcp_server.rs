@@ -966,6 +966,7 @@ impl AdvWikiMcpServer {
         let slug = args
             .get("slug")
             .and_then(|v| v.as_str())
+            .map(normalize_page_slug)
             .ok_or("Missing required arg: slug")?;
 
         let mode = args
@@ -1021,6 +1022,7 @@ impl AdvWikiMcpServer {
         let slug = args
             .get("slug")
             .and_then(|v| v.as_str())
+            .map(normalize_page_slug)
             .ok_or("Missing required arg: slug")?;
 
         let content = args
@@ -1333,6 +1335,7 @@ impl AdvWikiMcpServer {
         let slug = args
             .get("slug")
             .and_then(|v| v.as_str())
+            .map(normalize_page_slug)
             .ok_or("Missing required arg: slug")?;
 
         let rationale = args.get("rationale").and_then(|v| v.as_str());
@@ -2304,6 +2307,43 @@ mod tests {
         assert_eq!(normalize_page_slug("home"), "home");
         assert_eq!(normalize_page_slug("wiki://page/home"), "home");
         assert_eq!(normalize_page_slug("wiki://page/getting-started"), "getting-started");
+    }
+
+    #[tokio::test]
+    async fn test_update_page_accepts_wiki_uri_slug() {
+        let dir = TempDir::new().unwrap();
+        let server = make_server(dir.path()).await;
+
+        // Forma URI (wiki://page/...) deve ser normalizada — sem isso, validate_slug
+        // rejeitaria o `/` e `:` com erro de slug inválido.
+        server
+            .tool_update_page(&json!({
+                "slug": "wiki://page/home",
+                "mode": "overwrite",
+                "content": "# Home"
+            }))
+            .await
+            .expect("update_page deve aceitar a forma wiki://page/");
+
+        // Gravou na página `home` (e injetou datas — Bug 1).
+        let content = server.file_manager.read_page("home").await.unwrap();
+        assert!(content.contains("# Home"));
+        assert!(content.contains("updated_at"));
+        assert!(content.contains("created_at"));
+    }
+
+    #[tokio::test]
+    async fn test_delete_page_accepts_wiki_uri_slug() {
+        let dir = TempDir::new().unwrap();
+        let server = make_server(dir.path()).await;
+
+        server.file_manager.write_page("home", "# Home").await.unwrap();
+        server
+            .tool_delete_page(&json!({ "slug": "wiki://page/home" }))
+            .await
+            .expect("delete_page deve aceitar a forma wiki://page/");
+
+        assert!(server.file_manager.read_page("home").await.is_err());
     }
 
     /// monta um servidor de teste com uma Wiki vazia inicializada.

@@ -486,28 +486,59 @@ fn convert_bare_wiki_links(line: &str) -> (String, usize) {
     let mut count = 0;
     let mut rest = line;
 
-    while let Some(pos) = rest.find(prefix) {
-        out.push_str(&rest[..pos]);
-        let after = &rest[pos + prefix.len()..];
-        let end = after
-            .find(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != '.')
-            .unwrap_or(after.len());
-        let slug = after[..end].trim_end_matches('.');
-        if slug.is_empty() || !is_valid_slug(slug) {
-            // preserva como estava
-            out.push_str(prefix);
-            rest = after;
-            continue;
+    loop {
+        let next_tick = rest.find('`');
+        let next_link = rest.find(prefix);
+
+        match (next_tick, next_link) {
+            // Há um span de inline code antes do próximo link bare: copia o
+            // span ` ... ` verbatim (não convertemos wiki:// dentro de código).
+            (Some(t), link) if link.is_none_or(|lp| t < lp) => {
+                out.push_str(&rest[..t]);
+                let after_tick = &rest[t + 1..];
+                match after_tick.find('`') {
+                    Some(close) => {
+                        out.push('`');
+                        out.push_str(&after_tick[..close]);
+                        out.push('`');
+                        rest = &after_tick[close + 1..];
+                    }
+                    None => {
+                        // backtick sem fechamento na linha: copia o resto verbatim
+                        out.push('`');
+                        out.push_str(after_tick);
+                        break;
+                    }
+                }
+            }
+            // Link bare antes de qualquer inline code.
+            (_, Some(pos)) => {
+                out.push_str(&rest[..pos]);
+                let after = &rest[pos + prefix.len()..];
+                let end = after
+                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != '.')
+                    .unwrap_or(after.len());
+                let slug = after[..end].trim_end_matches('.');
+                if slug.is_empty() || !is_valid_slug(slug) {
+                    // preserva como estava
+                    out.push_str(prefix);
+                    rest = after;
+                    continue;
+                }
+                out.push_str(&format!("[[{slug}]]"));
+                count += 1;
+                // se houve um `.` removido do fim, devolve-o ao output (pontuação)
+                let trailing = &after[slug.len()..end];
+                out.push_str(trailing);
+                rest = &after[end..];
+            }
+            // Nada mais a converter (sem backtick e sem link).
+            _ => {
+                out.push_str(rest);
+                break;
+            }
         }
-        out.push_str(&format!("[[{slug}]]"));
-        count += 1;
-        // se houve um `.` removido do fim, devolve-o ao output (pontuação)
-        let consumed_in_after = end;
-        let trailing = &after[slug.len()..consumed_in_after];
-        out.push_str(trailing);
-        rest = &after[consumed_in_after..];
     }
-    out.push_str(rest);
     (out, count)
 }
 
@@ -625,6 +656,22 @@ mod tests {
     fn test_convert_bare_preserves_trailing_punctuation() {
         let (out, n) = convert_bare_wiki_links("veja wiki://page/home.");
         assert_eq!(out, "veja [[home]].");
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn test_convert_bare_skips_inline_code_span() {
+        // wiki:// dentro de inline code (com slug inválido por causa do espaço)
+        // não deve ser convertido pelo conversor bare — o span fica intacto.
+        let (out, n) = convert_bare_wiki_links("antes `wiki://page/foo bar` depois");
+        assert_eq!(out, "antes `wiki://page/foo bar` depois");
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn test_convert_bare_converts_outside_but_not_inside_code() {
+        let (out, n) = convert_bare_wiki_links("wiki://page/a e `wiki://page/b c`");
+        assert_eq!(out, "[[a]] e `wiki://page/b c`");
         assert_eq!(n, 1);
     }
 
