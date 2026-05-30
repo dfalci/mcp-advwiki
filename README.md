@@ -1,364 +1,139 @@
-# AdvWiki — persistent project memory for AI coding assistants
+# AdvWiki — persistent project memory for AI coding agents
 
-AdvWiki is an [MCP](https://modelcontextprotocol.io) server that gives an AI coding assistant a file-backed, searchable knowledge base for a software project. It runs over `stdio` with JSON-RPC 2.0 and works with any MCP client (Claude, Codex CLI, and others).
+AdvWiki is a local MCP server that gives coding agents a durable, searchable memory for a software project.
 
-The problem it targets is specific to working with an AI on a codebase: the assistant loses everything it learned the moment the session ends. The cause of a race condition you spent an afternoon diagnosing, why service A talks to service B over a queue instead of HTTP, which config flag breaks staging — none of it carries over. Next session you explain it again. AdvWiki keeps that knowledge in Markdown files on disk and exposes full-text search over them, so the assistant retrieves what's already known instead of being re-told.
+It stores project knowledge as Markdown files, indexes them with BM25 full-text search, and exposes them to MCP clients as tools and resources. The goal is simple: when an AI assistant learns something important about your system, it should not disappear when the chat ends.
 
-Search uses [Tantivy](https://github.com/quickwit-oss/tantivy) (BM25, the ranking model behind Lucene and Elasticsearch). Everything runs locally — no external server, no embeddings, no third-party APIs.
+Use it for architecture notes, service descriptions, decisions, integration patterns, investigated bugs, runbooks, raw evidence, and project conventions.
 
----
+AdvWiki is local-first:
 
-## Why does this exist?
-
-### Context windows don't persist
-
-An AI assistant operates inside a context window. What you sent in the last messages is available; once the session ends or the window fills up, it's gone. Whatever the assistant worked out about the project during that session doesn't carry into the next one — it starts from zero.
-
-AdvWiki keeps the knowledge in Markdown files that outlive the session. The assistant doesn't need to remember; it queries the wiki.
-
-This is also distinct from a single growing memory file, which tends to bloat and go stale. Here the content is editable Markdown, and retrieval is a ranked search rather than dumping the whole file into the prompt.
-
-### Knowledge scattered across services
-
-In a multi-service codebase, the information needed to answer one question is spread out: each service has its own repo, its own docs, its own logs. A new developer — or an assistant trying to help — has to look in several places before answering something basic.
-
-AdvWiki acts as one reference point. You add documentation pages, processed logs, API specs, and decision notes; BM25 search ranks them on query. A question like _"which service handles authentication?"_ becomes a search plus a read, instead of opening five repos.
-
-### Accumulated, not just remembered
-
-AdvWiki sits as a persistence layer between you and the assistant. What the assistant figures out about the code, the architectural decisions made during a session, a bug that was hard to track down — those get written to the wiki. The next session reads them back. It isn't short-term context and it isn't an undifferentiated dump; it's knowledge that accumulates and stays queryable.
-
-For the workflow this is meant to support — the assistant reading the index, searching for relevant context, doing the work, then recording what it learned — see [Skills and the learning process](#skills-and-the-learning-process).
+- no external server;
+- no embeddings required;
+- no third-party API calls;
+- plain Markdown on disk;
+- optional Git versioning;
+- compatible with Obsidian-style wikilinks.
 
 ---
 
-## Getting Started
+## Why this exists
 
-### What you need
+AI coding assistants are useful inside one session, but they usually forget the hard-won context from previous sessions.
 
-- Node.js + npm if you want the easiest install path...
-- Rust (edition 2024, stable toolchain) only if you want to build from source.
-- Git only if you want to clone the repository.
+That means you keep repeating things like:
 
-### Install with npm (recommended)
+- why a service uses a queue instead of HTTP;
+- which feature flag breaks staging;
+- what caused a race condition last week;
+- which service owns authentication;
+- what was decided during an architecture discussion;
+- which workaround is safe and which one was rejected.
 
-If you're just trying to use AdvWiki in Claude Desktop or another MCP client, the easiest path is installing it globally with npm:
+AdvWiki turns that project knowledge into a local, searchable wiki that agents can read before answering and update when you explicitly ask them to preserve something.
+
+It is not meant to replace source code, logs, tests, or official documentation. It is a project memory layer that helps the agent recover context and avoid starting from zero.
+
+---
+
+## What you get
+
+- **Searchable Markdown wiki** — pages live under `.advwiki/pages/`.
+- **BM25 full-text search** — powered by Tantivy, useful for exact technical terms, service names, errors, queues, endpoints, and config keys.
+- **MCP tools and resources** — agents can search, read, create, update, lint, and organize the wiki.
+- **Raw evidence store** — logs, extracted files, specs, API snippets, and long pasted content can be stored separately from curated pages.
+- **Frontmatter metadata** — pages can declare `type`, `project`, `status`, `tags`, `sources`, `related`, `confidence`, and `owner`.
+- **Obsidian-compatible links** — use `[[slug]]` and `[[slug|Display text]]` inside page bodies.
+- **Graph tools** — backlinks, orphans, related pages, link suggestions, and Mermaid graph output.
+- **Reviewable edits** — agents can propose a diff before changing a page.
+- **Traceable claims** — important statements can include source, confidence, and last verification date.
+- **Optional Git autocommit** — keep wiki changes versioned in an isolated Git repository inside `.advwiki/`.
+
+---
+
+## Quick install
+
+### 1. Install the binary
 
 ```bash
 npm install -g mcp-advwiki@latest
 ```
 
-That gives you the `mcp-advwiki` command in your terminal, so you can run it directly:
+Check that it works:
 
 ```bash
-mcp-advwiki
+mcp-advwiki --help
 ```
 
-If you want AdvWiki to use another folder as the project root, pass `--root`:
+### 2. Pick the project root
+
+AdvWiki stores its files under the project root you pass with `--root`.
 
 ```bash
-mcp-advwiki --root /path/to/project
+mcp-advwiki --root /path/to/your/project
 ```
 
-If you omit `--root`, AdvWiki keeps the current behavior and uses the current working directory of the process.
+If you omit `--root`, AdvWiki uses the current working directory of the process. For real projects, prefer passing `--root` explicitly so the MCP client always points to the right folder.
 
-### Versioning the wiki with git (`--autocommit`)
+### 3. Install the bundled Claude skill
 
-Pass `--autocommit` to keep the wiki content under git version control:
+The repository ships with an `advwiki-memory` skill that teaches the agent when to search the wiki, when not to write, how to structure pages, and how to use claims and links.
 
 ```bash
-mcp-advwiki --root /path/to/project --autocommit
+mcp-advwiki --skill --root /path/to/your/project
 ```
 
-When enabled, AdvWiki manages a git repository **rooted at `<root>/.advwiki/`**
-(fully isolated from any project repo that may contain the wiki):
+This writes:
 
-- On first run it does `git init` and writes a pre-configured `.gitignore`
-  that versions the useful content (`pages/`, `sources/`, `metadata/`) and
-  ignores rebuildable/transient artifacts (`index/`, `proposals/`, migration
-  backups).
-- Each batch of changes is auto-committed (debounced ~3s) with a message
-  derived from the operations, e.g. `wiki: update queue-service, delete old`.
-- After each commit it runs a best-effort `git push` to the current branch's
-  **upstream, if one is configured** — set up the remote once yourself
-  (`git -C <root>/.advwiki remote add ...` + `git push -u ...`). Without an
-  upstream, the push is skipped; network/auth failures only log and never
-  block the wiki.
-- Only the primary instance commits (matching the primary/secondary indexing
-  roles). Commits are unsigned (machine-generated).
+```text
+/path/to/your/project/.claude/skills/advwiki-memory/skill.md
+```
 
-### Running inside claude
+Re-run the same command after upgrading AdvWiki to refresh the skill.
 
-To use AdvWiki as a tool inside Claude, you first need to install the bundled skill (see the [Skills](#skills-and-the-learning-process) section below). 
+### 4. Add AdvWiki to Claude Code
 
-The next step is to add the server to your `claude_desktop_config.json`: 
+From your project directory:
 
 ```bash
-cd <your project folder>
-mcp-advwiki --skill
-claude mcp add mcp-advwiki -- mcp-advwiki
+claude mcp add --transport stdio advwiki -- mcp-advwiki --root "$(pwd)"
 ```
 
-Now you're good to go
-
-### Build from source (optional)
-
-If you prefer building everything yourself...
+With Git autocommit enabled:
 
 ```bash
-# Clone the repository
-git clone https://github.com/dfalci/mcp-advwiki.git
-cd mcp-advwiki
-
-# Build in release mode (optimized binary)
-cargo build --release
-
-# The binary will be at target/release/mcp-advwiki
+claude mcp add --transport stdio advwiki -- mcp-advwiki --root "$(pwd)" --autocommit
 ```
 
-After building, you can run it straight with Cargo:
+On Windows PowerShell:
+
+```powershell
+$project = (Get-Location).Path
+mcp-advwiki --skill --root $project
+claude mcp add --transport stdio advwiki -- mcp-advwiki --root $project --autocommit
+```
+
+Verify:
 
 ```bash
-cargo run
+claude mcp list
 ```
 
-Or use the compiled binary directly:
+Inside Claude Code, use:
 
-```bash
-./target/release/mcp-advwiki
+```text
+/mcp
 ```
 
-### Choosing the project root
+### 5. Add AdvWiki to Claude Desktop
 
-By default, AdvWiki keeps the current behavior: it uses the **current working directory of the process** as the project root.
-
-That selected root is where the server expects and/or creates:
-
-- `.advwiki/`
-- `.advwikilog.md`
-- `rawindex.md`
-
-If you want the server to initialize the wiki structure from another OS folder, start it with the optional `--root <path>` parameter:
-
-```bash
-mcp-advwiki --root /path/to/project
-
-# or, if you're running from source with Cargo
-cargo run -- --root /path/to/project
-
-# or using the compiled binary
-./target/release/mcp-advwiki --root /path/to/project
-```
-
-You can also use the inline form:
-
-```bash
-./target/release/mcp-advwiki --root=/path/to/project
-```
-
-If you omit the parameter, the behavior remains exactly the same as today.
-
----
-
-## Frontmatter
-
-Every wiki page can carry a YAML frontmatter block at the top — the same format used by Jekyll and Hugo:
-
-```markdown
----
-type: service
-project: auth-service
-status: active
-tags:
-  - backend
-  - api
-sources:
-  - raw://source/abc123
-related:
-  - auth-adr-001
-owner: alice
-confidence: high
----
-
-# Auth Service
-
-Your content here.
-```
-
-The server manages `updated_at` and `created_at` automatically: every time you call `update_page` (or `propose_page_update`), `updated_at` is injected or refreshed (format `YYYY-MM-DD`). `created_at` is only written once, on the first save.
-
-Pages without a frontmatter block are fully supported — the fields are all optional. The frontmatter is stripped before indexing, so BM25 search sees only the actual Markdown content.
-
-### Supported fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | string | Semantic type: `service`, `decision`, `pattern`, `runbook`, `bug`, `note`, `index`, ... |
-| `project` | string | Which project this page belongs to |
-| `status` | string | e.g. `active`, `draft`, `deprecated`, `accepted` |
-| `created_at` | date | Set automatically on first write (YYYY-MM-DD) |
-| `updated_at` | date | Updated automatically on every write (YYYY-MM-DD) |
-| `confidence` | string | How reliable the content is: `high`, `medium`, `low` |
-| `sources` | list | `raw://source/<id>` URIs that back this page |
-| `related` | list | Slugs of related pages |
-| `tags` | list | Free-form tags |
-| `owner` | string | Person responsible for keeping it up to date |
-
----
-
-## How it works
-
-AdvWiki has four main pieces that talk to each other:
-
-### The watcher — filesystem events
-
-There's a module (`watcher.rs`) that monitors the wiki directories using the `notify` crate. Every time you create, edit, or remove a `.md` file inside `.advwiki/pages/`, the watcher notices and sends an event through the internal channel.
-
-Same thing for _raw sources_ ... raw files you've indexed (logs, CSVs, API JSONs) that live in `.advwiki/sources/`.
-
-### The search engine — BM25 on disk
-
-The `search.rs` module maintains a Tantivy index in `.advwiki/index/`. Whenever a new page event arrives, the index gets updated. Tantivy tokenizes the text and keeps the search structures ready to go.
-
-When the AI asks _"search for 'JWT authentication'"_, AdvWiki isn't doing a grep — it's running a search ranked by statistical relevance. BM25 weighs term frequency, rarity in the corpus, and document length, so the most relevant page ranks first.
-
-### The MCP server — the bridge to the AI
-
-The `mcp_server.rs` module implements the MCP protocol over stdin/stdout. It exposes:
-
-- **Resources**: reading pages, lists, logs, metadata. The AI accesses it as if it were a logical filesystem (`wiki://page/home`, `raw://source/abc123`).
-- **Tools**: actions the AI can trigger: search, create page, delete, validate index integrity, download external content.
-
-Everything via JSON-RPC 2.0, just like the MCP spec says.
-
-### The storage — directory layout
-
-The `storage.rs` module manages the directory structure in `.advwiki/` under the selected project root:
-
-```
-.advwiki/
-  pages/        - your Markdown pages ({slug}.md)
-  sources/      - indexed raw content
-  metadata/     - JSON metadata for each raw source
-  proposals/    - pending/applied change proposals ({proposal_id}.json)
-  index/        - Tantivy index (managed automatically)
-```
-
-In that same selected root you'll find `.advwikilog.md` (operational log) and `rawindex.md` (readable index of raw sources).
-
-### Fully reactive
-
-On startup, AdvWiki rebuilds the index by scanning everything that already exists on disk. After that, it keeps listening for changes. You edit a `.md` in your editor and the AI can already search for the new content in the very next message.
-
----
-
-## Search as a RAG tool
-
-RAG (_Retrieval-Augmented Generation_) is the pattern where the AI queries an external knowledge base before answering, instead of relying only on what's in the context window.
-
-AdvWiki implements the "R" in RAG: the retrieval step. The `query_wiki` tool takes a text query and returns the most relevant docs from the index. The AI then uses these docs as context to generate its answer.
-
-In practice, the flow goes like:
-
-1. You ask: _"what's the authentication flow in the gateway service?"_
-2. The AI decides it needs extra context
-3. Calls `query_wiki` with the query `gateway authentication flow`
-4. BM25 returns the 5 most relevant pages (with score and snippet)
-5. The AI reads the full pages via `read_resource`
-6. Answers based on real content, not on what it "remembers" or hallucinates
-
-This matters when the project is too big to fit in a system prompt or a single memory file. Instead of pushing 200 files into the prompt, you document the parts that matter in the wiki and let search narrow it down at query time.
-
----
-
-## Obsidian compatibility
-
-AdvWiki stores pages as plain Markdown files inside `.advwiki/pages/`. Point [Obsidian](https://obsidian.md) at that folder (or any vault that includes it) and **the same files become editable on both sides** — no plugin, no sync layer, no format translation.
-
-### Wikilink syntax everywhere
-
-Inline links use `[[slug]]` and `[[slug|Display text]]` — the same notation Obsidian uses natively. Backlinks, the graph view, and Obsidian's link suggestions all work out of the box. From the wiki side, `wiki_graph`, `backlinks`, `orphans`, `related_pages`, `link_suggestions`, and the lint's broken-link check follow the exact same links.
-
-```markdown
-Veja [[queue-service-overview]] para começar.
-Tabela completa em [[queue-service-endpoints|os endpoints REST]].
-```
-
-### Bidirectional editing
-
-You can edit a page in Obsidian and the server picks it up via the filesystem watcher (Tantivy reindexes within seconds). You can also have the AI edit via `update_page` / `propose_page_update` and Obsidian sees the new content immediately. Both directions are first-class.
-
-### Automatic, one-time migration
-
-Wikis created with previous AdvWiki versions used the legacy `[Text](wiki://page/slug)` form for inline links. The server migrates them to wikilink syntax **automatically on the next boot** — no skill action, no tool call required:
-
-- Idempotent (gated by a `.advwiki/.schema-version` marker — never runs twice).
-- Creates a full backup in `.advwiki/.backup-pre-wikilinks-{timestamp}/` before any write.
-- Atomic per file (write-temp + rename); safe to interrupt.
-- Logs a summary line to `.advwikilog.md` describing what changed.
-- Preserves code blocks, inline code (outside Claims `Source:` fields), frontmatter, and `raw://` URIs untouched.
-- Dry-run mode: set `ADVWIKI_MIGRATION_DRYRUN=1` to preview without writing.
-
-The link parser is also lenient: even after migration, pages pasted from older backups or external sources keep working — both `[[slug]]` and `wiki://page/slug` are recognized as the same edge in the graph.
-
-### What `wiki://` still means
-
-`wiki://` is **not gone** — it remains the MCP protocol identifier scheme used by:
-
-| Use | Example | Visible to Obsidian? |
-|---|---|---|
-| MCP resources URI / `read_knowledge_uri` arg | `wiki://page/home`, `wiki://log`, `wiki://index` | No |
-| Tool params (`backlinks`, `verify_claim`, ...) | `slug: "wiki://page/home"` | No |
-| Search index document key (Tantivy) | `wiki://page/home` | No |
-| Inline link in a page body | ~~`[Home](wiki://page/home)`~~ → use `[[home]]` | **Yes** |
-
-Only the last row affects what Obsidian renders. Everything else is JSON-RPC plumbing the AI sees and Obsidian never touches.
-
----
-
-## Skills and the learning process
-
-AdvWiki is meant to be used together with a **Skill** — an instruction file that guides how the AI uses the wiki: when to search before answering, when to write back what it learned, how to structure pages.
-
-The repository ships a baseline skill (`advwiki-memory`) that covers this. You can customize it or write your own.
-
-### Installing the bundled skill
-
-The `advwiki-memory` skill ships embedded inside the binary. To drop it into a project, run:
-
-```bash
-# installs the skill in the current directory
-mcp-advwiki --skill
-
-# or pick the target project explicitly
-mcp-advwiki --skill --root /path/to/project
-```
-
-The command creates `<root>/.claude/skills/advwiki-memory/skill.md` (creating parent folders if needed) and exits — it does not start the MCP server. `<root>` defaults to the current working directory; pass `--root` to target a different project.
-
-Re-running `--skill` overwrites the file, so this is also how you refresh the skill after upgrading the binary.
-
-### How it works
-
-A Skill might contain a learning script. Something like:
-
-1. Read `wiki://index` to understand what's documented
-2. For each listed service, read the corresponding page
-3. Build a mental map of the architecture
-4. Compare it with `rawindex.md` to cross-reference with indexed source code
-
-The AI follows this script on its first interaction with the project. The knowledge it gains gets recorded in the wiki itself (creating summary pages, diagrams, notes), so in the next session the process is incremental — it doesn't have to relearn everything, just look up what's already been registered.
-
----
-
-## Setting up in Claude Desktop
-
-If you installed AdvWiki with npm, this is the preferred setup for `claude_desktop_config.json`:
+Edit `claude_desktop_config.json` and add:
 
 ```json
 {
   "mcpServers": {
     "advwiki": {
+      "type": "stdio",
       "command": "mcp-advwiki",
       "args": ["--root", "/path/to/your/project"]
     }
@@ -366,84 +141,502 @@ If you installed AdvWiki with npm, this is the preferred setup for `claude_deskt
 }
 ```
 
-If you're running from a locally built binary instead, point `command` to that file path.
+With Git autocommit:
 
 ```json
 {
   "mcpServers": {
     "advwiki": {
-      "command": "/path/to/mcp-advwiki/target/release/mcp-advwiki",
-      "args": ["--root", "/path/to/your/project"]
+      "type": "stdio",
+      "command": "mcp-advwiki",
+      "args": ["--root", "/path/to/your/project", "--autocommit"]
     }
   }
 }
 ```
 
-If you prefer the old behavior, keep `"args": []` and the server will continue using the process working directory as its base folder.
-
-Restart openclaude or similar and the server naturally shows up as an available tool.
+Restart Claude Desktop after editing the config.
 
 ---
 
-## Logical URIs
+## First useful prompts
 
-AdvWiki exposes content through a simple URI scheme:
+After installing, ask your agent something concrete:
 
-| Scheme | URI | Returns |
-|---------|-----|---------|
-| `wiki://` | `wiki://page/{slug}` | Full contents of the page |
-| `wiki://` | `wiki://page/index` | Navigable wiki index generated by `rebuild_wiki_index` (grouped by `type` and `project`) |
-| `wiki://` | `wiki://index` | Raw sources index — same content as `rawindex.md` (lines `source_id \| path \| extracted_at`) |
-| `wiki://` | `wiki://rawindex` | Alias for `wiki://index` |
-| `wiki://` | `wiki://log` | Operational log |
-| `raw://` | `raw://source/{id}` | Raw contents of the raw source |
-| `raw://` | `raw://sourcemetadata/{id}` | JSON metadata |
+```text
+Search AdvWiki for what we already know about the authentication flow.
+```
 
-The URIs are accessible both as **resources** (passive reading) and via **tools** like `read_knowledge_uri`. To enumerate pages or raw sources, use `resources/list` or the `list_pages_by_*` tools — there is no `wiki://list` or `raw://sources` URI.
+```text
+Create a page documenting the queue-service architecture. Use frontmatter, claims, and links where useful.
+```
 
-> These are **protocol-level identifiers** used between the AI and the server. For inline links inside page bodies use `[[slug]]` (Obsidian-compatible wikilink syntax) — see the [Obsidian compatibility](#obsidian-compatibility) section.
+```text
+Record this decision in AdvWiki: we will use SQS for asynchronous invoice processing instead of synchronous HTTP, because retries and backpressure matter more than immediate response time.
+```
+
+```text
+Run lint_wiki quick and tell me what needs cleanup.
+```
+
+```text
+Show the wiki graph in Mermaid format.
+```
+
+```text
+Propose an update to the payment integration page, but show me the diff before applying it.
+```
 
 ---
 
-## Available tools
+## How AdvWiki thinks about knowledge
 
-The AI has access to these MCP tools (names match what `tools/list` returns):
+AdvWiki separates **raw evidence** from **curated knowledge**.
 
-- **query_wiki** — full-text BM25 search. Args: `question` (required), `maxPages` (1–50, default 10), `includeRawReferences` (bool, default false; when false only wiki pages are returned).
-- **update_page** — creates or updates a page. Args: `slug`, `mode` (`overwrite` | `append`), `content`; optional `rationale` is appended to the operational log.
-- **propose_page_update** — proposes a page change *without writing it*. Stores a reviewable proposal under `.advwiki/proposals/<id>.json` and returns a unified diff between the current and proposed content. Args: `slug`, `content` (the full proposed Markdown), `reason`. Returns a `proposal_id` to be used with `apply_page_update`.
-- **apply_page_update** — applies a proposal created by `propose_page_update`. Args: `proposalId`, optional `force` (default false). Before writing, it re-checks via an MD5 hash that the page has not changed since the proposal; on a mismatch it refuses unless `force` is set. The operation is recorded in the operational log.
-- **delete_page** — removes a page by `slug`; optional `rationale` is logged.
-- **ingest_source** — downloads external content (HTTP/HTTPS or local file path) and stores it as a raw source. Args: `sourceUri`, `sourceType`, optional `force` (default false). The `source_id` is a stable MD5 of `sourceUri`.
-- **ingest_extracted_content** — saves already-extracted text as a raw source. Args: `logicalUri` (must be `raw://source/<id>`), `sourceType`, `title`, `content`, optional `force`.
-- **delete_raw_source** — removes a raw source (content + metadata) and updates `rawindex.md`. Args: `sourceId`; optional `rationale` is logged.
-- **lint_wiki** — wiki quality report. Args: `scope` (`quick` | `all`). `quick` checks: broken internal links (both `[[slug]]` and legacy `wiki://page/slug` pointing to missing pages), orphan pages (no page links to them), raw sources with no derived page, pages without frontmatter, pages over 50 KB, pages missing a "See also" section. `all` adds: stale pages (file not modified in 90+ days), decision pages (`decisao-*`, `decision-*`, `adr-*`) missing a rationale section (`## Rationale`, `## Justificativa`, etc.), and similar page pairs (Jaccard token similarity > 60% — duplicate/merge candidates).
-- **list_pages_by_type** — lists pages whose frontmatter `type` field matches the given value. Args: `pageType` (e.g. `service`, `decision`).
-- **list_pages_by_project** — lists pages whose frontmatter `project` field matches. Args: `project`.
-- **list_pages_by_tag** — lists pages that contain the given tag in frontmatter. Args: `tag`.
-- **find_pages_without_sources** — lists pages with no `sources` field in frontmatter (or with it empty) — candidates for linkage with raw sources. No args.
-- **rebuild_wiki_index** — scans all pages, reads their frontmatter, and writes a navigable index to `wiki://page/index` grouped by `type` and `project`. Run this after bulk imports or reorganizations. No args.
-- **wiki_graph** — renders the wiki link graph. Edges come from inline page links in either `[[slug]]` (Obsidian) or legacy `wiki://page/slug` form, and from the frontmatter `related` field. Args: optional `format` (`summary` — counts plus top hubs; `full` — adjacency list; `mermaid` — diagram; default `summary`).
-- **backlinks** — lists pages that point to a given page. Args: `slug` (also accepts a `wiki://page/{slug}` URI).
-- **orphans** — lists pages with no incoming links. Links from the generated `index` page are ignored, so the index does not mask real orphans. No args.
-- **related_pages** — lists pages related to a given page, classifying each relationship as bidirectional, declared (frontmatter `related`), links-to, or linked-from. Args: `slug`.
-- **link_suggestions** — suggests links between not-yet-connected pages, ranking by content similarity (Jaccard) plus boosts for shared `project` and tags. Args: optional `slug` (focus on one page; otherwise scans the whole wiki), `maxSuggestions` (default 10), `minSimilarity` (default 0.15).
-- **find_claims** — lists traceable claims (the `## Claims` block) across the wiki, with each claim's text, source, confidence, and last-verified date. Args: optional `slug` (focus one page; otherwise scans the whole wiki).
-- **find_claims_without_source** — lists claims with no `Source` field — statements with no documented origin. No args.
-- **find_conflicting_claims** — heuristic triage: flags pairs of claims with overlapping vocabulary as conflict-review candidates. It does not detect contradiction. Args: optional `minSimilarity` (Jaccard, default 0.25).
-- **verify_claim** — updates a claim's `Last verified` date, marking it as re-checked. Args: `slug`, `claimIndex` (1-based), optional `date` (default today).
-- **read_knowledge_uri** — reads any logical URI (`wiki://page/{slug}`, `wiki://log`, `wiki://index`, `wiki://rawindex`, `raw://source/{id}`, `raw://sourcemetadata/{id}`). Args: `uri`.
+### Raw evidence
 
-Passive reads (page list, log, raw sources, metadata) are also available through MCP **resources** via `resources/list` and `resources/read` — no tool call required for plain reads.
+Use raw sources for content that should be preserved but not necessarily read as documentation:
+
+- logs;
+- stack traces;
+- long pasted conversations;
+- extracted file content;
+- API responses;
+- CSV, JSON, Markdown, or text dumps;
+- investigation notes before they are cleaned up.
+
+Raw sources live under:
+
+```text
+.advwiki/sources/
+.advwiki/metadata/
+rawindex.md
+```
+
+### Curated pages
+
+Use wiki pages for durable, human-readable project knowledge:
+
+- service overview;
+- architecture decisions;
+- integration contracts;
+- runbooks;
+- known bugs;
+- deployment notes;
+- project conventions;
+- important flows;
+- synthesized investigation results.
+
+Curated pages live under:
+
+```text
+.advwiki/pages/
+```
+
+The best workflow is:
+
+1. store raw evidence when needed;
+2. summarize the durable part into one or more curated pages;
+3. link curated pages back to raw evidence using `sources` or `## Claims`;
+4. keep pages small, linked, and searchable.
+
+---
+
+## Recommended workflow
+
+### Before answering project-specific questions
+
+The agent should search AdvWiki when the user asks about a concrete project, service, module, endpoint, queue, table, deployment issue, bug, or prior decision.
+
+Good searches are short and exact:
+
+```text
+queue-service retry policy
+```
+
+```text
+gateway authentication jwt
+```
+
+```text
+staging feature flag invoice
+```
+
+BM25 is not semantic search. Exact names, errors, and technical terms matter.
+
+### When writing to the wiki
+
+Agents should not write to AdvWiki just because they found something interesting. They should write only when the user explicitly asks to record, save, document, register, or update knowledge.
+
+For small additive changes, `update_page` with `append` is usually fine.
+
+For substantial changes, prefer:
+
+1. `propose_page_update`;
+2. show the diff;
+3. ask for approval;
+4. `apply_page_update`.
+
+### After bulk changes
+
+Run:
+
+```text
+rebuild_wiki_index
+lint_wiki quick
+```
+
+Use graph tools to keep navigation healthy:
+
+```text
+orphans
+link_suggestions
+backlinks
+wiki_graph
+```
+
+---
+
+## Directory layout
+
+AdvWiki creates and manages this structure under the selected root:
+
+```text
+<project-root>/
+  .advwiki/
+    pages/        # curated Markdown pages
+    sources/      # raw source contents
+    metadata/     # JSON metadata for raw sources
+    proposals/    # reviewable page update proposals
+    index/        # Tantivy index, rebuilt automatically
+  .advwikilog.md  # operational log
+  rawindex.md     # readable index of raw sources
+```
+
+The `.advwiki/index/` folder is generated. Do not edit it manually.
+
+---
+
+## Page format
+
+Pages are plain Markdown. YAML frontmatter is optional but recommended.
+
+```markdown
+---
+type: service
+project: billing
+status: active
+tags:
+  - backend
+  - invoices
+sources:
+  - raw://source/session-2026-05-30-billing-investigation
+related:
+  - billing-integration-payments
+  - decision-invoice-processing-async
+confidence: high
+owner: platform-team
+---
+
+# Billing Service
+
+## Summary
+
+One or two sentences explaining what this page records.
+
+## Context
+
+Why this knowledge matters.
+
+## Details
+
+Curated technical content.
+
+## Decisions Made
+
+- **What**: ...
+- **Why**: ...
+- **Rejected alternatives**: ...
+
+## Points of Attention
+
+Gotchas, risks, limitations, operational notes.
+
+## Claims
+
+- The billing service publishes invoice processing jobs asynchronously.
+  - Source: [[decision-invoice-processing-async]]
+  - Confidence: high
+  - Last verified: 2026-05-30
+
+- The retry timeout was confirmed from production logs.
+  - Source: `raw://source/prod-log-2026-05-30`
+  - Confidence: medium
+  - Last verified: 2026-05-30
+
+## See also
+
+- [[billing-integration-payments]] — payment provider integration
+- [[decision-invoice-processing-async]] — async processing decision
+```
+
+AdvWiki manages `created_at` and `updated_at` automatically on writes.
+
+---
+
+## Links and URIs
+
+Inside page bodies, use Obsidian-compatible wikilinks:
+
+```markdown
+See [[queue-service-overview]] for the consumer flow.
+See [[queue-service-endpoints|REST endpoints]] for API details.
+```
+
+Use `wiki://` and `raw://` as MCP-level resource identifiers:
+
+| URI | Meaning |
+|---|---|
+| `wiki://page/{slug}` | Full wiki page |
+| `wiki://page/index` | Generated navigable wiki index |
+| `wiki://index` | Raw source index, same content as `rawindex.md` |
+| `wiki://rawindex` | Alias for `wiki://index` |
+| `wiki://log` | Operational log |
+| `raw://source/{id}` | Raw source content |
+| `raw://sourcemetadata/{id}` | Raw source metadata |
+
+Do not use legacy `[Text](wiki://page/slug)` links in page bodies. New content should use `[[slug]]`.
+
+---
+
+## Tools at a glance
+
+### Search and read
+
+| Tool | Purpose |
+|---|---|
+| `query_wiki` | Search pages and optionally raw sources with BM25 |
+| `read_knowledge_uri` | Read `wiki://...` or `raw://...` content |
+| MCP resources | Passive resource listing and reading through the MCP client |
+
+### Write and review
+
+| Tool | Purpose |
+|---|---|
+| `update_page` | Create, append, or overwrite a page |
+| `propose_page_update` | Create a reviewable proposal with a unified diff |
+| `apply_page_update` | Apply a proposal, with change conflict protection |
+| `delete_page` | Remove a wiki page |
+
+### Raw evidence
+
+| Tool | Purpose |
+|---|---|
+| `ingest_source` | Store content from HTTP/HTTPS or local file path |
+| `ingest_extracted_content` | Store already-extracted text as a raw source |
+| `delete_raw_source` | Remove raw source content and metadata |
+
+### Organization
+
+| Tool | Purpose |
+|---|---|
+| `list_pages_by_type` | Find pages by frontmatter `type` |
+| `list_pages_by_project` | Find pages by frontmatter `project` |
+| `list_pages_by_tag` | Find pages by tag |
+| `find_pages_without_sources` | Find pages without documented sources |
+| `rebuild_wiki_index` | Regenerate `wiki://page/index` |
+| `lint_wiki` | Run wiki quality checks |
+
+### Graph and navigation
+
+| Tool | Purpose |
+|---|---|
+| `wiki_graph` | Render graph summary, full adjacency, or Mermaid diagram |
+| `backlinks` | List pages that point to a page |
+| `orphans` | Find pages with no incoming links |
+| `related_pages` | Show related pages and relationship type |
+| `link_suggestions` | Suggest missing links based on content similarity |
+
+### Claims
+
+| Tool | Purpose |
+|---|---|
+| `find_claims` | List traceable claims |
+| `find_claims_without_source` | Find claims without source metadata |
+| `find_conflicting_claims` | Heuristic conflict-review candidates |
+| `verify_claim` | Update a claim's last verification date |
+
+---
+
+## Obsidian compatibility
+
+AdvWiki pages are just Markdown files under:
+
+```text
+.advwiki/pages/
+```
+
+You can open that folder as an Obsidian vault, or include it inside an existing vault. No plugin is required.
+
+Both directions work:
+
+- edit a page in Obsidian → AdvWiki watcher reindexes it;
+- ask the agent to update a page → Obsidian sees the updated Markdown;
+- links use `[[slug]]`, so the Obsidian graph and AdvWiki graph stay aligned.
+
+Older AdvWiki pages that used `wiki://page/...` links are migrated automatically on startup. The migration is one-time, creates a backup, and is safe to re-run.
+
+To preview migration without writing:
+
+```bash
+ADVWIKI_MIGRATION_DRYRUN=1 mcp-advwiki --root /path/to/project
+```
+
+---
+
+## Git autocommit
+
+Use `--autocommit` when you want AdvWiki to version wiki changes automatically.
+
+```bash
+mcp-advwiki --root /path/to/project --autocommit
+```
+
+AdvWiki initializes a separate Git repository inside:
+
+```text
+/path/to/project/.advwiki/.git/
+```
+
+This keeps wiki history isolated from the project repository.
+
+It versions useful content such as:
+
+```text
+pages/
+sources/
+metadata/
+```
+
+It ignores rebuildable or transient content such as:
+
+```text
+index/
+proposals/
+migration backups
+```
+
+Commits are debounced and generated from domain events. If an upstream remote is configured, AdvWiki attempts a best-effort `git push`. Push failures are logged but do not block the server.
+
+Example remote setup:
+
+```bash
+git -C /path/to/project/.advwiki remote add origin git@github.com:your-org/your-project-advwiki.git
+git -C /path/to/project/.advwiki push -u origin main
+```
+
+---
+
+## Multiple instances
+
+AdvWiki supports multiple processes pointing at the same wiki root.
+
+One instance becomes **primary** and owns Tantivy indexing. Other instances run as **secondary** readers. If the primary exits, a secondary can promote itself and take over indexing.
+
+This matters when more than one MCP client or assistant is connected to the same project wiki.
+
+---
+
+## Build from source
+
+```bash
+git clone https://github.com/dfalci/mcp-advwiki.git
+cd mcp-advwiki
+cargo build --release
+```
+
+Run it:
+
+```bash
+./target/release/mcp-advwiki --root /path/to/project
+```
+
+Install the bundled skill from the local build:
+
+```bash
+./target/release/mcp-advwiki --skill --root /path/to/project
+```
+
+---
+
+## Best practices
+
+### Prefer specific pages
+
+Avoid generic pages like:
+
+```text
+architecture
+bugs
+notes
+decisions
+```
+
+Prefer specific slugs:
+
+```text
+orders-service-overview
+orders-integration-payment-provider
+decision-jwt-authentication
+pattern-retry-with-backoff
+billing-known-bugs
+```
+
+### Keep pages curated
+
+Do not turn wiki pages into log dumps. Store long evidence as raw sources and summarize what matters in curated pages.
+
+### Link aggressively, but usefully
+
+Every important page should point to related services, decisions, runbooks, and integrations.
+
+### Use claims only for load-bearing facts
+
+Not every sentence needs to be a claim. Use claims for facts that may need verification later: limits, timeouts, retry behavior, queue semantics, security assumptions, external service behavior, and non-obvious invariants.
+
+### Let the user control writes
+
+The safest agent behavior is:
+
+- search proactively;
+- answer from recovered context;
+- write only when the user explicitly asks;
+- propose diffs for substantial edits.
+
+---
+
+## When not to use AdvWiki
+
+AdvWiki is not the right storage for:
+
+- secrets;
+- credentials;
+- full source code dumps;
+- unstable scratch notes that should disappear;
+- data that belongs in tests, code comments, or official docs;
+- information the user did not ask to preserve.
 
 ---
 
 ## Origin
 
-The original idea comes from Andrej Karpathy's [gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) on giving an AI a searchable wiki as memory. AdvWiki is an implementation of that idea as a standalone MCP server.
+AdvWiki is inspired by Andrej Karpathy's idea of giving AI agents a searchable local wiki as long-term project memory.
+
+This implementation packages that idea as a standalone MCP server for coding assistants.
 
 ---
 
 ## License
 
 MIT.
+
