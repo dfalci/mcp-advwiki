@@ -262,6 +262,12 @@ fn classify_single_path_event(
         return None;
     }
 
+    // O diretório git do versionamento (--autocommit) não é conteúdo da wiki —
+    // ignoramos para não gerar ruído nem risco de loop commit→evento.
+    if path_is_in(path, &wiki_dir.join(".git")) {
+        return None;
+    }
+
     if path_is_in(path, wiki_dir) {
         return Some(WikiEvent::Unknown(format!(
             "Alteração não classificada dentro da wiki: {} ({:?})",

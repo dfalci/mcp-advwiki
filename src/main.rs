@@ -1,6 +1,7 @@
 mod change_plan;
 mod claims;
 mod frontmatter;
+mod git_sync;
 mod graph;
 mod lint;
 mod mcp_server;
@@ -67,6 +68,11 @@ Opcoes:
       --skill        write the bundled skill to
                      `<root>/.claude/skills/advwiki-memory/skill.md`
                      (creating parent dirs if needed) and exit.
+      --autocommit   version the wiki content in a git repo rooted at
+                     `<root>/.advwiki/` (git init on first run, with a
+                     pre-set .gitignore). Auto-commits each batch of
+                     changes and pushes (best-effort) to the current
+                     branch's upstream, if any.
   -h, --help         show this help message
 
 Claude Desktop configuration (claude_desktop_config.json):
@@ -86,6 +92,7 @@ struct CliOptions {
     root: Option<PathBuf>,
     show_help: bool,
     install_skill: bool,
+    autocommit: bool,
 }
 
 fn parse_cli_args(args: &[String]) -> Result<CliOptions, String> {
@@ -129,6 +136,10 @@ fn parse_cli_args(args: &[String]) -> Result<CliOptions, String> {
             }
             "--skill" | "-skill" => {
                 options.install_skill = true;
+                index += 1;
+            }
+            "--autocommit" | "-autocommit" => {
+                options.autocommit = true;
                 index += 1;
             }
             _ => {
@@ -244,21 +255,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "Índice de busca inicializado"
     );
 
+    // Versionamento git opcional (--autocommit). O setup do repo (git init,
+    // .gitignore) e o committer só sobem quando a instância assume o papel de
+    // primary — assim múltiplas instâncias não brigam pelo repositório.
+    let git_sync: Option<Arc<git_sync::GitSync>> = if cli.autocommit {
+        Some(Arc::new(git_sync::GitSync::new(wiki.wiki_dir(), true)))
+    } else {
+        None
+    };
+
     // Conforme o papel detectado pelo engine: a primary assume o índice
     // imediatamente; a secondary fica polling até a primary cair.
     if search_engine.is_primary() {
         let wiki_clone = wiki.clone();
         let engine_clone = search_engine.clone();
+        let git_clone = git_sync.clone();
         tokio::spawn(async move {
-            if let Err(e) = run_primary_role(wiki_clone, engine_clone).await {
+            if let Err(e) = run_primary_role(wiki_clone, engine_clone, git_clone).await {
                 tracing::error!(error = %e, "Falha ao executar papel de primary");
             }
         });
     } else {
         let wiki_clone = wiki.clone();
         let engine_clone = search_engine.clone();
+        let git_clone = git_sync.clone();
         tokio::spawn(async move {
-            run_secondary_with_failover(wiki_clone, engine_clone).await;
+            run_secondary_with_failover(wiki_clone, engine_clone, git_clone).await;
         });
     }
 
@@ -277,13 +299,34 @@ async fn main() -> Result<(), Box<dyn Error>> {
 async fn run_primary_role(
     wiki: Arc<storage::WikiFileManager>,
     engine: Arc<search::WikiSearchEngine>,
+    git_sync: Option<Arc<git_sync::GitSync>>,
 ) -> anyhow::Result<()> {
     rebuild_index(&wiki, &engine).await?;
+
+    // Prepara o versionamento git agora que somos primary. Falha no setup
+    // desabilita o auto-commit mas não derruba o servidor.
+    let committer = match &git_sync {
+        Some(git) => match git.ensure_repo().await {
+            Ok(()) => Some(git_sync::spawn_committer(git.clone())),
+            Err(e) => {
+                tracing::error!(error = %e, "Falha ao preparar repo git da wiki — auto-commit desabilitado");
+                None
+            }
+        },
+        None => None,
+    };
 
     let (mut event_rx, _watcher) = watcher::WikiWatcher::start(wiki.root().to_path_buf())?;
     tracing::info!("File watcher iniciado");
 
     while let Some(event) = event_rx.recv().await {
+        // Enfileira a descrição da mudança para o commit (debounced) antes de
+        // reindexar. Eventos não-versionados (log, rawindex, ruído) viram None.
+        if let Some(tx) = &committer {
+            if let Some(desc) = git_sync::commit_description(&event) {
+                let _ = tx.send(desc);
+            }
+        }
         handle_wiki_event(&engine, &wiki, event).await;
     }
 
@@ -299,6 +342,7 @@ async fn run_primary_role(
 async fn run_secondary_with_failover(
     wiki: Arc<storage::WikiFileManager>,
     engine: Arc<search::WikiSearchEngine>,
+    git_sync: Option<Arc<git_sync::GitSync>>,
 ) {
     tracing::info!(
         poll_interval_s = SECONDARY_PROMOTION_POLL_INTERVAL.as_secs(),
@@ -310,7 +354,7 @@ async fn run_secondary_with_failover(
 
         if engine.try_promote_to_primary() {
             tracing::info!("Promovido a primary — assumindo controle do índice");
-            if let Err(e) = run_primary_role(wiki, engine).await {
+            if let Err(e) = run_primary_role(wiki, engine, git_sync).await {
                 tracing::error!(error = %e, "Falha ao executar papel de primary após promoção");
             }
             return;
@@ -334,6 +378,7 @@ mod tests {
                 root: None,
                 show_help: false,
                 install_skill: false,
+                autocommit: false,
             }
         );
     }
@@ -354,6 +399,22 @@ mod tests {
             .expect("parse should succeed");
         assert!(cli.install_skill);
         assert_eq!(cli.root, Some(PathBuf::from("C:\\repo")));
+    }
+
+    #[test]
+    fn parse_cli_accepts_autocommit_flag() {
+        let cli = parse_cli_args(&["--autocommit".into()]).expect("parse should succeed");
+        assert!(cli.autocommit);
+        assert!(!cli.install_skill);
+
+        let with_root = parse_cli_args(&["--autocommit".into(), "--root".into(), "C:\\repo".into()])
+            .expect("parse should succeed");
+        assert!(with_root.autocommit);
+        assert_eq!(with_root.root, Some(PathBuf::from("C:\\repo")));
+
+        // default: desligado
+        let off = parse_cli_args(&[]).expect("parse should succeed");
+        assert!(!off.autocommit);
     }
 
     #[test]

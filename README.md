@@ -60,6 +60,31 @@ mcp-advwiki --root /path/to/project
 
 If you omit `--root`, AdvWiki keeps the current behavior and uses the current working directory of the process.
 
+### Versioning the wiki with git (`--autocommit`)
+
+Pass `--autocommit` to keep the wiki content under git version control:
+
+```bash
+mcp-advwiki --root /path/to/project --autocommit
+```
+
+When enabled, AdvWiki manages a git repository **rooted at `<root>/.advwiki/`**
+(fully isolated from any project repo that may contain the wiki):
+
+- On first run it does `git init` and writes a pre-configured `.gitignore`
+  that versions the useful content (`pages/`, `sources/`, `metadata/`) and
+  ignores rebuildable/transient artifacts (`index/`, `proposals/`, migration
+  backups).
+- Each batch of changes is auto-committed (debounced ~3s) with a message
+  derived from the operations, e.g. `wiki: update queue-service, delete old`.
+- After each commit it runs a best-effort `git push` to the current branch's
+  **upstream, if one is configured** — set up the remote once yourself
+  (`git -C <root>/.advwiki remote add ...` + `git push -u ...`). Without an
+  upstream, the push is skipped; network/auth failures only log and never
+  block the wiki.
+- Only the primary instance commits (matching the primary/secondary indexing
+  roles). Commits are unsigned (machine-generated).
+
 ### Running inside claude
 
 To use AdvWiki as a tool inside Claude, you first need to install the bundled skill (see the [Skills](#skills-and-the-learning-process) section below). 

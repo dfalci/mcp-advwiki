@@ -5,6 +5,40 @@ All notable changes to `mcp-advwiki` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`--autocommit` CLI flag**: versions the wiki content in a git repository
+  rooted at `<root>/.advwiki/`, isolated from any project repo containing the
+  wiki. On first run it does `git init` and writes a pre-configured
+  `.gitignore` (versioning `pages/`, `sources/`, `metadata/`; ignoring the
+  Tantivy `index/`, `proposals/`, and migration backups). Each batch of
+  changes is auto-committed (debounced, hooked into the watcher's domain
+  events so git/index writes never trigger a commit) with a message derived
+  from the operations, followed by a best-effort `git push` to the current
+  branch's upstream when configured. Only the primary instance commits;
+  commits are unsigned.
+
+### Fixed
+
+- **Dates on save**: `update_page`/`propose_page_update`/`verify_claim` now
+  always record `created_at`/`updated_at` — a minimal frontmatter block is
+  injected when the content has none (previously the dates were silently
+  dropped).
+- **Slug normalization**: `update_page`, `delete_page`, and
+  `propose_page_update` now accept the `wiki://page/{slug}` form like the
+  other slug-taking tools.
+- **Watcher renames**: single-path rename events (`RenameMode::From`/`To`) are
+  classified as delete/create instead of update, preventing stale entries in
+  the search index.
+- **Migration**: the bare-link converter no longer rewrites `wiki://` inside
+  inline-code spans.
+- **Search snippets**: truncation now counts characters (not bytes) and only
+  appends `...` when it actually truncates.
+- **Raw index**: `|` and newlines in `original_path` are sanitized so a single
+  entry per line is preserved on round-trip.
+
 ## [0.2.0] - 2026-05-23
 
 ### Changed
