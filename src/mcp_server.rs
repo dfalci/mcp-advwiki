@@ -462,7 +462,7 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "update_page".into(),
-                description: Some("Cria ou atualiza uma página da Wiki. Suporta modo 'overwrite' (substitui todo o conteúdo) ou 'append' (adiciona ao final).".into()),
+                description: Some("Cria ou atualiza uma página da Wiki. Sem 'section', 'content' é o documento inteiro ('overwrite' substitui tudo, 'append' adiciona ao fim). Com 'section', a operação afeta APENAS aquela seção (heading): 'overwrite' troca o corpo da seção, 'append' adiciona ao fim dela — preferível para editar uma parte sem reenviar a página toda.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
@@ -472,12 +472,16 @@ impl AdvWikiMcpServer {
                         },
                         "mode": {
                             "type": "string",
-                            "description": "Modo de escrita: 'overwrite' ou 'append'",
+                            "description": "Modo de escrita: 'overwrite' (substitui) ou 'append' (adiciona ao fim). Com 'section', o escopo é a seção, não o documento.",
                             "enum": ["overwrite", "append"]
                         },
                         "content": {
                             "type": "string",
-                            "description": "Conteúdo em Markdown da página"
+                            "description": "Conteúdo em Markdown. Sem 'section', é a página inteira; com 'section', é apenas o corpo da seção."
+                        },
+                        "section": {
+                            "type": "string",
+                            "description": "Opcional. Título de uma seção existente (heading, ex: 'Detalhes' ou '## Detalhes'). Se informado, só essa seção é alterada e o resto da página é preservado. A página deve existir. Erro se a seção não existir ou for ambígua."
                         },
                         "rationale": {
                             "type": "string",
@@ -485,6 +489,39 @@ impl AdvWikiMcpServer {
                         }
                     },
                     "required": ["slug", "mode", "content"]
+                }),
+            },
+            McpTool {
+                name: "set_page_metadata".into(),
+                description: Some("Edita o frontmatter de uma página EXISTENTE sem reenviar o corpo. 'set' define campos escalares (ex: type, project, status, confidence, owner); 'add'/'remove' adicionam/removem itens de campos de lista (ex: tags, related, sources) sem duplicar. Campos não mencionados — inclusive os desconhecidos/custom — são preservados. 'created_at'/'updated_at' são gerenciados pelo servidor e não podem ser definidos.".into()),
+                inputSchema: json!({
+                    "type": "object",
+                    "properties": {
+                        "slug": {
+                            "type": "string",
+                            "description": "Slug da página (aceita também a URI wiki://page/{slug})"
+                        },
+                        "set": {
+                            "type": "object",
+                            "description": "Campos escalares a definir/substituir, ex: {\"status\": \"active\", \"project\": \"auth\"}",
+                            "additionalProperties": { "type": "string" }
+                        },
+                        "add": {
+                            "type": "object",
+                            "description": "Itens a adicionar a campos de lista (sem duplicar), ex: {\"tags\": [\"backend\"], \"related\": [\"outra-pagina\"]}",
+                            "additionalProperties": { "type": "array", "items": { "type": "string" } }
+                        },
+                        "remove": {
+                            "type": "object",
+                            "description": "Itens a remover de campos de lista, ex: {\"tags\": [\"obsoleta\"]}",
+                            "additionalProperties": { "type": "array", "items": { "type": "string" } }
+                        },
+                        "rationale": {
+                            "type": "string",
+                            "description": "Justificativa da alteração (registrada no log operacional)"
+                        }
+                    },
+                    "required": ["slug"]
                 }),
             },
             McpTool {
@@ -657,16 +694,8 @@ impl AdvWikiMcpServer {
                 }),
             },
             McpTool {
-                name: "rebuild_wiki_index".into(),
-                description: Some("Reconstrói a página de índice navegável da Wiki (wiki://page/index), agrupando todas as páginas por tipo e projeto conforme o frontmatter.".into()),
-                inputSchema: json!({
-                    "type": "object",
-                    "properties": {}
-                }),
-            },
-            McpTool {
                 name: "propose_page_update".into(),
-                description: Some("Propõe uma alteração de página sem gravá-la: salva uma proposta revisável e retorna o diff entre o conteúdo atual e o proposto. Use apply_page_update para aplicar.".into()),
+                description: Some("Propõe uma alteração de página sem gravá-la: salva uma proposta revisável e retorna o diff entre o conteúdo atual e o proposto. Use apply_page_update para aplicar. Com 'section', 'content' é apenas o novo corpo daquela seção (o servidor reconstrói o documento) — o diff fica pequeno e focado.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
@@ -676,7 +705,11 @@ impl AdvWikiMcpServer {
                         },
                         "content": {
                             "type": "string",
-                            "description": "Conteúdo Markdown completo proposto para a página"
+                            "description": "Sem 'section': conteúdo Markdown completo proposto para a página. Com 'section': apenas o novo corpo daquela seção."
+                        },
+                        "section": {
+                            "type": "string",
+                            "description": "Opcional. Título de uma seção existente (heading, ex: 'Detalhes'). Se informado, a proposta substitui apenas essa seção e preserva o resto. A página deve existir; erro se a seção não existir ou for ambígua."
                         },
                         "reason": {
                             "type": "string",
@@ -872,6 +905,7 @@ impl AdvWikiMcpServer {
         let result = match name.as_str() {
             "query_wiki" => self.tool_query_wiki(&arguments).await,
             "update_page" => self.tool_update_page(&arguments).await,
+            "set_page_metadata" => self.tool_set_page_metadata(&arguments).await,
             "ingest_source" => self.tool_ingest_source(&arguments).await,
             "ingest_extracted_content" => self.tool_ingest_extracted(&arguments).await,
             "lint_wiki" => self.tool_lint_wiki(&arguments).await,
@@ -882,7 +916,6 @@ impl AdvWikiMcpServer {
             "list_pages_by_project" => self.tool_list_pages_by_project(&arguments).await,
             "list_pages_by_tag" => self.tool_list_pages_by_tag(&arguments).await,
             "find_pages_without_sources" => self.tool_find_pages_without_sources(&arguments).await,
-            "rebuild_wiki_index" => self.tool_rebuild_wiki_index(&arguments).await,
             "propose_page_update" => self.tool_propose_page_update(&arguments).await,
             "apply_page_update" => self.tool_apply_page_update(&arguments).await,
             "wiki_graph" => self.tool_wiki_graph(&arguments).await,
@@ -983,18 +1016,39 @@ impl AdvWikiMcpServer {
             .get("rationale")
             .and_then(|v| v.as_str());
 
-        let (raw_content, is_new_page) = match mode {
-            "overwrite" => {
-                let is_new = self.file_manager.read_page(slug).await.is_err();
-                (content.to_string(), is_new)
-            }
-            "append" => {
-                match self.file_manager.read_page(slug).await {
-                    Ok(existing) => (format!("{existing}\n\n{content}"), false),
-                    Err(_) => (content.to_string(), true),
+        let section = args.get("section").and_then(|v| v.as_str());
+
+        let (raw_content, is_new_page) = if let Some(sec) = section {
+            // Edição por seção: o servidor reconstrói o documento trocando só a
+            // seção alvo. Exige página existente — não se cria uma seção numa
+            // página que não existe (use 'section' ausente para criar a página).
+            let existing = self.file_manager.read_page(slug).await.map_err(|_| {
+                format!(
+                    "Não é possível editar a seção '{sec}': a página '{slug}' não existe. \
+                     Crie a página primeiro (sem o argumento 'section')."
+                )
+            })?;
+            let section_mode = match mode {
+                "overwrite" => crate::sections::SectionMode::Replace,
+                "append" => crate::sections::SectionMode::Append,
+                _ => return Err(format!("Invalid mode: {mode}. Use 'overwrite' or 'append'")),
+            };
+            let updated = crate::sections::edit_section(&existing, sec, content, section_mode)?;
+            (updated, false)
+        } else {
+            match mode {
+                "overwrite" => {
+                    let is_new = self.file_manager.read_page(slug).await.is_err();
+                    (content.to_string(), is_new)
                 }
+                "append" => {
+                    match self.file_manager.read_page(slug).await {
+                        Ok(existing) => (format!("{existing}\n\n{content}"), false),
+                        Err(_) => (content.to_string(), true),
+                    }
+                }
+                _ => return Err(format!("Invalid mode: {mode}. Use 'overwrite' or 'append'")),
             }
-            _ => return Err(format!("Invalid mode: {mode}. Use 'overwrite' or 'append'")),
         };
 
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
@@ -1007,13 +1061,75 @@ impl AdvWikiMcpServer {
 
         // Registra no log se houver rationale
         if let Some(reason) = rationale {
-            let log_entry = format!("[{mode}] `{slug}`: {reason}");
+            let scope = section.map(|s| format!(" seção '{s}'")).unwrap_or_default();
+            let log_entry = format!("[{mode}{scope}] `{slug}`: {reason}");
             let _ = self.file_manager.append_to_log(&log_entry).await;
+        }
+
+        let scope = section
+            .map(|s| format!(", seção: '{s}'"))
+            .unwrap_or_default();
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text: format!("Página `{slug}` atualizada com sucesso (modo: {mode}{scope})."),
+        }])
+    }
+
+    // tool - set_page_metadata
+    async fn tool_set_page_metadata(&self, args: &Value) -> Result<Vec<McpToolContent>, String> {
+        let slug = args
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .map(normalize_page_slug)
+            .ok_or("Missing required arg: slug")?;
+
+        let set = args.get("set").map(json_obj_to_string_pairs).unwrap_or_default();
+        let add = args.get("add").map(json_obj_to_list_pairs).unwrap_or_default();
+        let remove = args.get("remove").map(json_obj_to_list_pairs).unwrap_or_default();
+        let rationale = args.get("rationale").and_then(|v| v.as_str());
+
+        if set.is_empty() && add.is_empty() && remove.is_empty() {
+            return Err("Informe ao menos um de 'set', 'add' ou 'remove'.".into());
+        }
+
+        // set_page_metadata edita; não cria página.
+        let existing = self.file_manager.read_page(slug).await.map_err(|_| {
+            format!(
+                "A página '{slug}' não existe. set_page_metadata edita metadados de páginas \
+                 existentes; crie a página com update_page primeiro."
+            )
+        })?;
+
+        let updated = crate::frontmatter::apply_metadata(&existing, &set, &add, &remove)?;
+
+        // Mesmo pipeline de gravação do update_page: datas gerenciadas + write.
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let final_content = crate::frontmatter::update_date_fields(&updated, &today, false);
+
+        self.file_manager
+            .write_page(slug, &final_content)
+            .await
+            .map_err(|e| format!("Write error: {e}"))?;
+
+        if let Some(reason) = rationale {
+            let log_entry = format!("[set_page_metadata] `{slug}`: {reason}");
+            let _ = self.file_manager.append_to_log(&log_entry).await;
+        }
+
+        let mut changes: Vec<String> = Vec::new();
+        for (k, v) in &set {
+            changes.push(format!("set {k}={v}"));
+        }
+        for (k, items) in &add {
+            changes.push(format!("add {k} += [{}]", items.join(", ")));
+        }
+        for (k, items) in &remove {
+            changes.push(format!("remove {k} -= [{}]", items.join(", ")));
         }
 
         Ok(vec![McpToolContent {
             content_type: "text".into(),
-            text: format!("Página `{slug}` atualizada com sucesso (modo: {mode})."),
+            text: format!("Metadados de `{slug}` atualizados: {}.", changes.join("; ")),
         }])
     }
 
@@ -1035,6 +1151,8 @@ impl AdvWikiMcpServer {
             .and_then(|v| v.as_str())
             .ok_or("Missing required arg: reason")?;
 
+        let section = args.get("section").and_then(|v| v.as_str());
+
         // Lê o estado atual da página (base da proposta).
         let base_content = self.file_manager.read_page(slug).await.ok();
         let base_page_exists = base_content.is_some();
@@ -1043,11 +1161,32 @@ impl AdvWikiMcpServer {
             .as_deref()
             .map(crate::change_plan::content_hash);
 
+        // Com 'section', 'content' é só o corpo da seção: o servidor reconstrói
+        // o documento completo trocando aquela seção (modo Replace). O diff
+        // resultante fica pequeno e revisável. Sem 'section', 'content' é o
+        // documento inteiro, como antes.
+        let effective_content = match section {
+            Some(sec) => {
+                let existing = base_content.as_deref().ok_or_else(|| {
+                    format!(
+                        "Não é possível propor edição da seção '{sec}': a página '{slug}' não existe."
+                    )
+                })?;
+                crate::sections::edit_section(
+                    existing,
+                    sec,
+                    content,
+                    crate::sections::SectionMode::Replace,
+                )?
+            }
+            None => content.to_string(),
+        };
+
         // Aplica os campos de data agora, para que o diff revisado seja
         // exatamente o conteúdo que será gravado na aplicação.
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let proposed_content =
-            crate::frontmatter::update_date_fields(content, &today, !base_page_exists);
+            crate::frontmatter::update_date_fields(&effective_content, &today, !base_page_exists);
 
         let proposal_id = crate::change_plan::new_proposal_id(slug);
         let proposal = crate::change_plan::PageProposal::new(
@@ -1489,147 +1628,6 @@ impl AdvWikiMcpServer {
         Ok(vec![McpToolContent {
             content_type: "text".into(),
             text,
-        }])
-    }
-
-    // tool - rebuild_wiki_index
-    async fn tool_rebuild_wiki_index(&self, _args: &Value) -> Result<Vec<McpToolContent>, String> {
-        use std::collections::BTreeMap;
-
-        struct PageMeta {
-            slug: String,
-            page_type: Option<String>,
-            project: Option<String>,
-            status: Option<String>,
-        }
-
-        let slugs = self
-            .file_manager
-            .list_pages()
-            .await
-            .map_err(|e| format!("List error: {e}"))?;
-
-        let mut pages: Vec<PageMeta> = Vec::new();
-        for slug in &slugs {
-            if slug == "index" {
-                continue;
-            }
-            let fm = match self.file_manager.read_page(slug).await {
-                Ok(content) => crate::frontmatter::parse_frontmatter(&content),
-                Err(_) => None,
-            };
-            pages.push(PageMeta {
-                slug: slug.clone(),
-                page_type: fm.as_ref().and_then(|f| f.page_type.clone()),
-                project: fm.as_ref().and_then(|f| f.project.clone()),
-                status: fm.as_ref().and_then(|f| f.status.clone()),
-            });
-        }
-        pages.sort_by(|a, b| a.slug.cmp(&b.slug));
-
-        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-
-        // Group by type (BTreeMap keeps alphabetical order)
-        let mut by_type: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-        let mut untyped: Vec<usize> = Vec::new();
-        for (i, page) in pages.iter().enumerate() {
-            match &page.page_type {
-                Some(t) => by_type.entry(t.clone()).or_default().push(i),
-                None => untyped.push(i),
-            }
-        }
-
-        // Group by project
-        let mut by_project: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-        for (i, page) in pages.iter().enumerate() {
-            if let Some(proj) = &page.project {
-                by_project.entry(proj.clone()).or_default().push(i);
-            }
-        }
-
-        let mut lines: Vec<String> = vec![
-            "---".into(),
-            "type: index".into(),
-            format!("updated_at: \"{today}\""),
-            "---".into(),
-            String::new(),
-            "# Índice da Wiki".into(),
-            String::new(),
-            format!("> Gerado automaticamente por `rebuild_wiki_index` em {today}. Não edite manualmente."),
-            String::new(),
-            "## Por Tipo".into(),
-            String::new(),
-        ];
-
-        if by_type.is_empty() && untyped.is_empty() {
-            lines.push("_Nenhuma página encontrada._".into());
-            lines.push(String::new());
-        } else {
-            for (type_name, indices) in &by_type {
-                lines.push(format!("### {type_name}"));
-                lines.push(String::new());
-                for &i in indices {
-                    let page = &pages[i];
-                    let mut meta = Vec::new();
-                    if let Some(p) = &page.project { meta.push(format!("project: {p}")); }
-                    if let Some(s) = &page.status  { meta.push(format!("status: {s}")); }
-                    let suffix = if meta.is_empty() { String::new() } else { format!(" — {}", meta.join(", ")) };
-                    lines.push(format!("- [[{}]]{suffix}", page.slug));
-                }
-                lines.push(String::new());
-            }
-            if !untyped.is_empty() {
-                lines.push("### (sem tipo)".into());
-                lines.push(String::new());
-                for &i in &untyped {
-                    let page = &pages[i];
-                    let mut meta = Vec::new();
-                    if let Some(p) = &page.project { meta.push(format!("project: {p}")); }
-                    if let Some(s) = &page.status  { meta.push(format!("status: {s}")); }
-                    let suffix = if meta.is_empty() { String::new() } else { format!(" — {}", meta.join(", ")) };
-                    lines.push(format!("- [[{}]]{suffix}", page.slug));
-                }
-                lines.push(String::new());
-            }
-        }
-
-        if !by_project.is_empty() {
-            lines.push("## Por Projeto".into());
-            lines.push(String::new());
-            for (proj_name, indices) in &by_project {
-                lines.push(format!("### {proj_name}"));
-                lines.push(String::new());
-                for &i in indices {
-                    let page = &pages[i];
-                    let mut meta = Vec::new();
-                    if let Some(t) = &page.page_type { meta.push(format!("type: {t}")); }
-                    if let Some(s) = &page.status    { meta.push(format!("status: {s}")); }
-                    let suffix = if meta.is_empty() { String::new() } else { format!(" — {}", meta.join(", ")) };
-                    lines.push(format!("- [[{}]]{suffix}", page.slug));
-                }
-                lines.push(String::new());
-            }
-        }
-
-        lines.push("---".into());
-        lines.push(format!("_Total: {} páginas indexadas._", pages.len()));
-
-        let content = lines.join("\n");
-
-        self.file_manager
-            .write_page("index", &content)
-            .await
-            .map_err(|e| format!("Write error: {e}"))?;
-
-        let log_entry = format!("[rebuild_wiki_index] Índice reconstruído com {} páginas", pages.len());
-        let _ = self.file_manager.append_to_log(&log_entry).await;
-
-        Ok(vec![McpToolContent {
-            content_type: "text".into(),
-            text: format!(
-                "Índice reconstruído com sucesso.\n- Páginas indexadas: {}\n- URI: `wiki://page/index`",
-                pages.len()
-            ),
         }])
     }
 
@@ -2086,6 +2084,51 @@ fn normalize_page_slug(input: &str) -> &str {
     input.strip_prefix("wiki://page/").unwrap_or(input)
 }
 
+/// Converte um objeto JSON `{chave: valor_escalar}` em pares `(String, String)`.
+/// Valores string/número/bool viram texto; outros tipos são ignorados.
+fn json_obj_to_string_pairs(v: &Value) -> Vec<(String, String)> {
+    v.as_object()
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, val)| {
+                    let s = match val {
+                        Value::String(s) => s.clone(),
+                        Value::Number(n) => n.to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        _ => return None,
+                    };
+                    Some((k.clone(), s))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Converte um objeto JSON `{chave: [item, ...]}` em pares `(String, Vec<String>)`.
+fn json_obj_to_list_pairs(v: &Value) -> Vec<(String, Vec<String>)> {
+    v.as_object()
+        .map(|m| {
+            m.iter()
+                .map(|(k, val)| {
+                    let items = val
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| match x {
+                                    Value::String(s) => Some(s.clone()),
+                                    Value::Number(n) => Some(n.to_string()),
+                                    _ => None,
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    (k.clone(), items)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn format_page_match_list(
     filter_desc: &str,
     matches: &[(String, crate::frontmatter::PageFrontmatter)],
@@ -2195,52 +2238,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rebuild_wiki_index_groups_by_type_and_project() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path().to_path_buf();
-        let file_manager = Arc::new(WikiFileManager::new(Some(root.clone())));
-        file_manager.init().await.unwrap();
-
-        let search_engine = Arc::new(WikiSearchEngine::new(root.join(".advwiki/index")).unwrap());
-
-        // Create pages with frontmatter
-        file_manager
-            .write_page("auth-service", "---\ntype: service\nproject: auth\nstatus: active\n---\n# Auth")
-            .await
-            .unwrap();
-        file_manager
-            .write_page("auth-adr-001", "---\ntype: decision\nproject: auth\nstatus: accepted\n---\n# ADR 001")
-            .await
-            .unwrap();
-        file_manager
-            .write_page("no-frontmatter", "# Plain page without frontmatter")
-            .await
-            .unwrap();
-
-        let server = AdvWikiMcpServer::new(file_manager.clone(), search_engine);
-        let result = server
-            .tool_rebuild_wiki_index(&json!({}))
-            .await
-            .unwrap();
-
-        assert_eq!(result.len(), 1);
-        assert!(result[0].text.contains("3"));
-        assert!(result[0].text.contains("wiki://page/index"));
-
-        // Verify the written index page
-        let index_content = file_manager.read_page("index").await.unwrap();
-        assert!(index_content.contains("### service"));
-        assert!(index_content.contains("### decision"));
-        assert!(index_content.contains("### (sem tipo)"));
-        assert!(index_content.contains("## Por Projeto"));
-        assert!(index_content.contains("### auth"));
-        assert!(index_content.contains("[[auth-service]]"));
-        assert!(index_content.contains("[[no-frontmatter]]"));
-        // The index page itself must not list itself
-        assert!(!index_content.contains("[[index]]"));
-    }
-
-    #[tokio::test]
     async fn test_tool_query_wiki_prefers_page_filter_before_top_k() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
@@ -2330,6 +2327,259 @@ mod tests {
         assert!(content.contains("# Home"));
         assert!(content.contains("updated_at"));
         assert!(content.contains("created_at"));
+    }
+
+    #[tokio::test]
+    async fn test_update_page_section_overwrite_preserves_rest() {
+        let dir = TempDir::new().unwrap();
+        let server = make_server(dir.path()).await;
+
+        server
+            .tool_update_page(&json!({
+                "slug": "svc",
+                "mode": "overwrite",
+                "content": "---\ntype: service\n---\n\n# Serviço\n\n## Detalhes\n\nCorpo antigo.\n\n## Veja também\n\n- [[outra]]\n"
+            }))
+            .await
+            .unwrap();
+
+        // edita só a seção Detalhes
+        server
+            .tool_update_page(&json!({
+                "slug": "svc",
+                "mode": "overwrite",
+                "section": "Detalhes",
+                "content": "Corpo NOVO da seção."
+            }))
+            .await
+            .unwrap();
+
+        let content = server.file_manager.read_page("svc").await.unwrap();
+        assert!(content.contains("Corpo NOVO da seção."));
+        assert!(!content.contains("Corpo antigo."));
+        // o resto da página é preservado
+        assert!(content.contains("# Serviço"));
+        assert!(content.contains("## Veja também"));
+        assert!(content.contains("- [[outra]]"));
+        // datas continuam gerenciadas
+        assert!(content.contains("updated_at"));
+    }
+
+    #[tokio::test]
+    async fn test_update_page_section_append_keeps_existing() {
+        let dir = TempDir::new().unwrap();
+        let server = make_server(dir.path()).await;
+
+        server
+            .tool_update_page(&json!({
+                "slug": "svc",
+                "mode": "overwrite",
+                "content": "# T\n\n## Notas\n\nprimeira nota\n"
+            }))
+            .await
+            .unwrap();
+
+        server
+            .tool_update_page(&json!({
+                "slug": "svc",
+                "mode": "append",
+                "section": "Notas",
+                "content": "segunda nota"
+            }))
+            .await
+            .unwrap();
+
+        let content = server.file_manager.read_page("svc").await.unwrap();
+        assert!(content.contains("primeira nota"));
+        assert!(content.contains("segunda nota"));
+    }
+
+    #[tokio::test]
+    async fn test_update_page_section_missing_page_errors() {
+        let dir = TempDir::new().unwrap();
+        let server = make_server(dir.path()).await;
+
+        let err = server
+            .tool_update_page(&json!({
+                "slug": "fantasma",
+                "mode": "overwrite",
+                "section": "Detalhes",
+                "content": "x"
+            }))
+            .await
+            .unwrap_err();
+        assert!(err.contains("não existe"));
+    }
+
+    #[tokio::test]
+    async fn test_update_page_section_unknown_section_errors() {
+        let dir = TempDir::new().unwrap();
+        let server = make_server(dir.path()).await;
+
+        server
+            .tool_update_page(&json!({
+                "slug": "svc",
+                "mode": "overwrite",
+                "content": "# T\n\n## Detalhes\n\nx\n"
+            }))
+            .await
+            .unwrap();
+
+        let err = server
+            .tool_update_page(&json!({
+                "slug": "svc",
+                "mode": "overwrite",
+                "section": "Inexistente",
+                "content": "y"
+            }))
+            .await
+            .unwrap_err();
+        assert!(err.contains("não encontrada"));
+    }
+
+    #[tokio::test]
+    async fn test_propose_page_update_section_produces_small_diff() {
+        let dir = TempDir::new().unwrap();
+        let server = make_server(dir.path()).await;
+
+        server
+            .tool_update_page(&json!({
+                "slug": "svc",
+                "mode": "overwrite",
+                "content": "# T\n\n## Detalhes\n\nantigo\n\n## Veja também\n\n- [[x]]\n"
+            }))
+            .await
+            .unwrap();
+
+        let resp = server
+            .tool_propose_page_update(&json!({
+                "slug": "svc",
+                "section": "Detalhes",
+                "content": "conteúdo proposto",
+                "reason": "revisar detalhes"
+            }))
+            .await
+            .unwrap();
+        let text = &resp[0].text;
+
+        // o diff cobre só a seção: menciona o novo e o antigo conteúdo da seção,
+        // mas não toca na seção "Veja também".
+        assert!(text.contains("conteúdo proposto"));
+        assert!(text.contains("-antigo") || text.contains("antigo"));
+        assert!(!text.contains("- [[x]]"), "o diff não deve mexer em outras seções");
+
+        // a proposta é aplicável e preserva o resto
+        let proposal_id = extract_proposal_id(text);
+        server
+            .tool_apply_page_update(&json!({ "proposalId": proposal_id }))
+            .await
+            .unwrap();
+        let content = server.file_manager.read_page("svc").await.unwrap();
+        assert!(content.contains("conteúdo proposto"));
+        assert!(!content.contains("antigo"));
+        assert!(content.contains("## Veja também"));
+        assert!(content.contains("- [[x]]"));
+    }
+
+    // ── set_page_metadata ────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_set_page_metadata_sets_scalar_and_keeps_body() {
+        let dir = TempDir::new().unwrap();
+        let server = make_server(dir.path()).await;
+        server
+            .tool_update_page(&json!({
+                "slug": "svc",
+                "mode": "overwrite",
+                "content": "---\ntype: service\nstatus: draft\n---\n\n# Serviço\n\ncorpo importante\n"
+            }))
+            .await
+            .unwrap();
+
+        server
+            .tool_set_page_metadata(&json!({
+                "slug": "svc",
+                "set": { "status": "active", "project": "auth" }
+            }))
+            .await
+            .unwrap();
+
+        let content = server.file_manager.read_page("svc").await.unwrap();
+        let fm = crate::frontmatter::parse_frontmatter(&content).unwrap();
+        assert_eq!(fm.status.as_deref(), Some("active"));
+        assert_eq!(fm.project.as_deref(), Some("auth"));
+        assert_eq!(fm.page_type.as_deref(), Some("service"));
+        assert!(content.contains("corpo importante"), "o corpo não pode ser tocado");
+        assert!(content.contains("updated_at"));
+    }
+
+    #[tokio::test]
+    async fn test_set_page_metadata_add_and_remove_tags() {
+        let dir = TempDir::new().unwrap();
+        let server = make_server(dir.path()).await;
+        server
+            .tool_update_page(&json!({
+                "slug": "p",
+                "mode": "overwrite",
+                "content": "---\ntype: note\ntags:\n  - a\n---\nx"
+            }))
+            .await
+            .unwrap();
+
+        server
+            .tool_set_page_metadata(&json!({
+                "slug": "p",
+                "add": { "tags": ["a", "b", "c"] },
+                "remove": { "tags": ["a"] }
+            }))
+            .await
+            .unwrap();
+
+        let content = server.file_manager.read_page("p").await.unwrap();
+        let fm = crate::frontmatter::parse_frontmatter(&content).unwrap();
+        // 'a' removida, 'b' e 'c' adicionadas sem duplicar
+        assert_eq!(fm.tags, vec!["b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn test_set_page_metadata_missing_page_errors() {
+        let dir = TempDir::new().unwrap();
+        let server = make_server(dir.path()).await;
+        let err = server
+            .tool_set_page_metadata(&json!({ "slug": "fantasma", "set": { "status": "active" } }))
+            .await
+            .unwrap_err();
+        assert!(err.contains("não existe"));
+    }
+
+    #[tokio::test]
+    async fn test_set_page_metadata_requires_an_operation() {
+        let dir = TempDir::new().unwrap();
+        let server = make_server(dir.path()).await;
+        server
+            .tool_update_page(&json!({ "slug": "p", "mode": "overwrite", "content": "# P" }))
+            .await
+            .unwrap();
+        let err = server
+            .tool_set_page_metadata(&json!({ "slug": "p" }))
+            .await
+            .unwrap_err();
+        assert!(err.contains("ao menos um"));
+    }
+
+    #[tokio::test]
+    async fn test_set_page_metadata_rejects_managed_date() {
+        let dir = TempDir::new().unwrap();
+        let server = make_server(dir.path()).await;
+        server
+            .tool_update_page(&json!({ "slug": "p", "mode": "overwrite", "content": "# P" }))
+            .await
+            .unwrap();
+        let err = server
+            .tool_set_page_metadata(&json!({ "slug": "p", "set": { "updated_at": "2020-01-01" } }))
+            .await
+            .unwrap_err();
+        assert!(err.contains("gerenciado automaticamente"));
     }
 
     #[tokio::test]

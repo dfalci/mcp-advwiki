@@ -98,6 +98,106 @@ pub fn update_date_fields(content: &str, today: &str, is_new_page: bool) -> Stri
     format!("---\n{fm_body}\n---\n{rest}")
 }
 
+/// Divide o conteúdo em `(corpo_do_frontmatter_yaml, resto)`. O primeiro é
+/// `None` quando não há um bloco de frontmatter válido.
+pub fn frontmatter_and_body(content: &str) -> (Option<&str>, &str) {
+    match split_frontmatter(content) {
+        Some((body, rest)) => (Some(body), rest),
+        None => (None, content),
+    }
+}
+
+/// Aplica edições ao frontmatter de uma página sem reenviar o corpo:
+///   - `set`: define campos escalares (`type`, `project`, `status`, ...);
+///   - `add`: adiciona itens a campos de lista (`tags`, `related`, `sources`),
+///     sem duplicar e criando a lista se ela não existir;
+///   - `remove`: remove itens de campos de lista (esvaziou → remove a chave).
+///
+/// O parsing usa um `Mapping` YAML genérico (não o struct `PageFrontmatter`),
+/// então qualquer campo é preservado — inclusive os desconhecidos/custom que o
+/// struct descartaria. O corpo da página fica intacto.
+///
+/// Não altera `created_at`/`updated_at` (gerenciados na escrita); tentar
+/// mencioná-los em qualquer operação é erro.
+pub fn apply_metadata(
+    content: &str,
+    set: &[(String, String)],
+    add: &[(String, Vec<String>)],
+    remove: &[(String, Vec<String>)],
+) -> Result<String, String> {
+    for key in set
+        .iter()
+        .map(|(k, _)| k)
+        .chain(add.iter().map(|(k, _)| k))
+        .chain(remove.iter().map(|(k, _)| k))
+    {
+        if key == "created_at" || key == "updated_at" {
+            return Err(format!(
+                "campo '{key}' é gerenciado automaticamente pelo servidor e não pode ser editado"
+            ));
+        }
+    }
+
+    let (fm_body, rest) = frontmatter_and_body(content);
+    let mut map: serde_yaml::Mapping = match fm_body {
+        Some(body) if !body.trim().is_empty() => {
+            serde_yaml::from_str(body).map_err(|e| format!("frontmatter YAML inválido: {e}"))?
+        }
+        _ => serde_yaml::Mapping::new(),
+    };
+
+    for (k, v) in set {
+        map.insert(
+            serde_yaml::Value::String(k.clone()),
+            serde_yaml::Value::String(v.clone()),
+        );
+    }
+
+    for (k, items) in add {
+        let key = serde_yaml::Value::String(k.clone());
+        let mut seq = match map.get(&key) {
+            Some(serde_yaml::Value::Sequence(s)) => s.clone(),
+            Some(_) => return Err(format!("campo '{k}' já existe e não é uma lista")),
+            None => Vec::new(),
+        };
+        for item in items {
+            let val = serde_yaml::Value::String(item.clone());
+            if !seq.contains(&val) {
+                seq.push(val);
+            }
+        }
+        map.insert(key, serde_yaml::Value::Sequence(seq));
+    }
+
+    for (k, items) in remove {
+        let key = serde_yaml::Value::String(k.clone());
+        if let Some(serde_yaml::Value::Sequence(seq)) = map.get(&key).cloned() {
+            let kept: Vec<serde_yaml::Value> = seq
+                .into_iter()
+                .filter(|e| match e {
+                    serde_yaml::Value::String(s) => !items.contains(s),
+                    _ => true,
+                })
+                .collect();
+            if kept.is_empty() {
+                map.remove(&key);
+            } else {
+                map.insert(key, serde_yaml::Value::Sequence(kept));
+            }
+        }
+    }
+
+    // Sem nenhum campo restante: devolve só o corpo. A gravação seguinte
+    // re-injeta o bloco com as datas gerenciadas.
+    if map.is_empty() {
+        return Ok(rest.to_string());
+    }
+
+    let yaml =
+        serde_yaml::to_string(&map).map_err(|e| format!("falha ao serializar frontmatter: {e}"))?;
+    Ok(format!("---\n{yaml}---\n{rest}"))
+}
+
 // ── Helpers internos ─────────────────────────────────────────────────────────
 
 /// extrai o texto bruto entre os delimitadores `---`.
@@ -412,5 +512,100 @@ mod tests {
         let body = "status: draft";
         let result = upsert_scalar(body, "status", "active");
         assert_eq!(result.matches("status:").count(), 1);
+    }
+
+    // ── apply_metadata ───────────────────────────────────────────────────────
+
+    fn set(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+    fn lists(pairs: &[(&str, &[&str])]) -> Vec<(String, Vec<String>)> {
+        pairs
+            .iter()
+            .map(|(k, vs)| (k.to_string(), vs.iter().map(|s| s.to_string()).collect()))
+            .collect()
+    }
+
+    #[test]
+    fn test_apply_metadata_sets_scalar_new_and_replace() {
+        let content = "---\ntype: service\nstatus: draft\n---\n\n# Corpo\n";
+        let out = apply_metadata(content, &set(&[("status", "active"), ("project", "auth")]), &[], &[]).unwrap();
+        let fm = parse_frontmatter(&out).unwrap();
+        assert_eq!(fm.status.as_deref(), Some("active"));
+        assert_eq!(fm.project.as_deref(), Some("auth"));
+        assert_eq!(fm.page_type.as_deref(), Some("service"));
+        // corpo preservado
+        assert!(out.contains("# Corpo"));
+    }
+
+    #[test]
+    fn test_apply_metadata_adds_and_dedups_list() {
+        let content = "---\ntype: note\ntags:\n  - a\n---\nx";
+        let out = apply_metadata(content, &[], &lists(&[("tags", &["a", "b"])]), &[]).unwrap();
+        let fm = parse_frontmatter(&out).unwrap();
+        // 'a' não duplica, 'b' é adicionado
+        assert_eq!(fm.tags, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_apply_metadata_add_creates_missing_list() {
+        let content = "---\ntype: note\n---\nx";
+        let out = apply_metadata(content, &[], &lists(&[("related", &["outra"])]), &[]).unwrap();
+        let fm = parse_frontmatter(&out).unwrap();
+        assert_eq!(fm.related, vec!["outra"]);
+    }
+
+    #[test]
+    fn test_apply_metadata_remove_item_and_empty_drops_key() {
+        let content = "---\ntype: note\ntags:\n  - a\n  - b\n---\nx";
+        let out = apply_metadata(content, &[], &[], &lists(&[("tags", &["a"])])).unwrap();
+        let fm = parse_frontmatter(&out).unwrap();
+        assert_eq!(fm.tags, vec!["b"]);
+
+        // remover o último item remove a chave inteira
+        let out2 = apply_metadata(&out, &[], &[], &lists(&[("tags", &["b"])])).unwrap();
+        assert!(!out2.contains("tags"));
+    }
+
+    #[test]
+    fn test_apply_metadata_remove_from_missing_is_noop() {
+        let content = "---\ntype: note\n---\nx";
+        let out = apply_metadata(content, &[], &[], &lists(&[("tags", &["a"])])).unwrap();
+        let fm = parse_frontmatter(&out).unwrap();
+        assert!(fm.tags.is_empty());
+    }
+
+    #[test]
+    fn test_apply_metadata_preserves_unknown_fields() {
+        // Campo custom que o struct PageFrontmatter não conhece — não pode sumir.
+        let content = "---\ntype: note\nobsidian_color: red\naliases:\n  - apelido\n---\ncorpo";
+        let out = apply_metadata(content, &set(&[("status", "active")]), &[], &[]).unwrap();
+        assert!(out.contains("obsidian_color: red"), "campo desconhecido sumiu: {out}");
+        assert!(out.contains("apelido"), "lista desconhecida sumiu: {out}");
+        assert!(out.contains("status: active"));
+        assert!(out.contains("corpo"));
+    }
+
+    #[test]
+    fn test_apply_metadata_add_on_scalar_errors() {
+        let content = "---\nstatus: draft\n---\nx";
+        let err = apply_metadata(content, &[], &lists(&[("status", &["a"])]), &[]).unwrap_err();
+        assert!(err.contains("não é uma lista"));
+    }
+
+    #[test]
+    fn test_apply_metadata_rejects_managed_dates() {
+        let content = "---\ntype: note\n---\nx";
+        assert!(apply_metadata(content, &set(&[("updated_at", "2020-01-01")]), &[], &[]).is_err());
+        assert!(apply_metadata(content, &set(&[("created_at", "2020-01-01")]), &[], &[]).is_err());
+    }
+
+    #[test]
+    fn test_apply_metadata_creates_frontmatter_when_absent() {
+        let content = "# Página sem frontmatter\n\ncorpo";
+        let out = apply_metadata(content, &set(&[("status", "active")]), &[], &[]).unwrap();
+        let fm = parse_frontmatter(&out).unwrap();
+        assert_eq!(fm.status.as_deref(), Some("active"));
+        assert!(out.contains("# Página sem frontmatter"));
     }
 }

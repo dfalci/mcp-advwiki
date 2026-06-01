@@ -270,6 +270,8 @@ Agents should not write to AdvWiki just because they found something interesting
 
 For small additive changes, `update_page` with `append` is usually fine.
 
+To change one part of an existing page, pass `section` (an existing heading title) to `update_page`: `mode: overwrite` replaces that section's body, `mode: append` adds to its end. The server reconstructs the rest of the page byte-for-byte, so this is safer than a full `overwrite` for a localized edit.
+
 For substantial changes, prefer:
 
 1. `propose_page_update`;
@@ -279,10 +281,11 @@ For substantial changes, prefer:
 
 ### After bulk changes
 
-Run:
+The navigable index page (`wiki://page/index`) is regenerated automatically by
+the server whenever pages change, so there is no manual rebuild step. A quick
+lint is still worth running:
 
 ```text
-rebuild_wiki_index
 lint_wiki quick
 ```
 
@@ -423,8 +426,9 @@ Do not use legacy `[Text](wiki://page/slug)` links in page bodies. New content s
 
 | Tool | Purpose |
 |---|---|
-| `update_page` | Create, append, or overwrite a page |
-| `propose_page_update` | Create a reviewable proposal with a unified diff |
+| `update_page` | Create, append, or overwrite a page — or, with `section`, edit a single section |
+| `set_page_metadata` | Edit a page's frontmatter (scalars and list fields) without resending the body |
+| `propose_page_update` | Create a reviewable proposal with a unified diff (whole page, or a single `section`) |
 | `apply_page_update` | Apply a proposal, with change conflict protection |
 | `delete_page` | Remove a wiki page |
 
@@ -444,7 +448,6 @@ Do not use legacy `[Text](wiki://page/slug)` links in page bodies. New content s
 | `list_pages_by_project` | Find pages by frontmatter `project` |
 | `list_pages_by_tag` | Find pages by tag |
 | `find_pages_without_sources` | Find pages without documented sources |
-| `rebuild_wiki_index` | Regenerate `wiki://page/index` |
 | `lint_wiki` | Run wiki quality checks |
 
 ### Graph and navigation

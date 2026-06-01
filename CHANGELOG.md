@@ -5,6 +5,57 @@ All notable changes to `mcp-advwiki` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-06-01
+
+### Added
+
+- **Section-scoped editing** for `update_page` and `propose_page_update`, via a
+  new optional `section` argument — no new tools. When set to an existing
+  heading title (ATX, e.g. `"Details"` or `"## Details"`), the operation edits
+  only that section and the server reconstructs the rest of the page
+  byte-for-byte, instead of forcing the agent to resend the whole document
+  (which risked silently dropping content in an `overwrite`).
+  - `update_page`: with `section`, `mode: overwrite` replaces the section body
+    and `mode: append` adds to the end of it. Without `section`, behavior is
+    unchanged.
+  - `propose_page_update`: with `section`, `content` is just the new section
+    body; the returned unified diff is small and focused, and applies via
+    `apply_page_update` as usual (replace-only).
+  - Boundaries respect heading **level**: a `## X` includes its `### Y`
+    subsections and ends at the next heading of level `<=`. Headings inside
+    fenced code blocks (` ``` ` / `~~~`) and the YAML frontmatter are ignored,
+    and the line terminator (CRLF/LF) is preserved — so editing a section never
+    rewrites unrelated lines. Unknown or ambiguous section names error out
+    without writing (the not-found message lists the available sections).
+    Sections are ATX headings (`#`) only; setext (`===`/`---`) headings are not
+    recognized as section boundaries.
+- **Automatic navigable-index regeneration**: the `wiki://page/index` page
+  (grouped by `type` and `project`) is now regenerated automatically by the
+  primary instance — once on boot and then debounced whenever pages change —
+  instead of relying on a manual tool call. The debounce coalesces a burst of
+  changes (bulk import, migration, `git checkout`) into a single regeneration
+  rather than one per file. The regeneration writes the `index` page, which the
+  watcher reports back as a change event; that self-event is filtered out
+  (`event_dirties_index` returns `false` for the `index` slug), so it never
+  schedules another regeneration — no loop. Only the primary instance
+  regenerates (it owns the event loop), and a regeneration failure is logged
+  without retrying tightly.
+- **`set_page_metadata` tool**: edits a page's YAML frontmatter without
+  resending the body. `set` defines scalar fields (`type`, `project`, `status`,
+  `confidence`, `owner`, …); `add`/`remove` add or remove items from list fields
+  (`tags`, `related`, `sources`) without duplicating. The frontmatter is parsed
+  as a generic YAML mapping rather than the typed struct, so **every** field is
+  preserved on write — including unknown/custom keys (e.g. Obsidian's
+  `aliases`) that the typed parser would drop. The page must already exist;
+  `created_at`/`updated_at` stay server-managed and are rejected if named.
+
+### Removed
+
+- **`rebuild_wiki_index` tool**: removed from the MCP surface. The navigable
+  index page it produced is now kept up to date automatically (see above), so
+  the manual command is redundant. Its generation logic moved to a reusable
+  `index_page::generate` function.
+
 ## [0.2.1] - 2026-05-30
 
 ### Added

@@ -3,10 +3,12 @@ mod claims;
 mod frontmatter;
 mod git_sync;
 mod graph;
+mod index_page;
 mod lint;
 mod mcp_server;
 mod migration;
 mod search;
+mod sections;
 mod storage;
 mod watcher;
 
@@ -19,6 +21,12 @@ use std::time::Duration;
 /// Trade-off: muito curto = log/CPU desnecessários; muito longo = atraso pra
 /// assumir o índice depois que a primary cai.
 const SECONDARY_PROMOTION_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Janela de quietude para regenerar a página de índice navegável após uma
+/// rajada de mudanças. Sem o debounce, um bulk import de N páginas regeneraria
+/// o índice N vezes (cada regeneração lê todas as páginas → O(n²)); com ele,
+/// regenera uma única vez quando a rajada acalma.
+const INDEX_REGEN_DEBOUNCE: Duration = Duration::from_secs(2);
 
 /// Conteúdo da skill embutido no binário em tempo de compilação. Distribuído
 /// junto com o executável para que `--skill` possa instalá-la em qualquer
@@ -301,6 +309,12 @@ async fn run_primary_role(
     engine: Arc<search::WikiSearchEngine>,
     git_sync: Option<Arc<git_sync::GitSync>>,
 ) -> anyhow::Result<()> {
+    // (Re)gera a página de índice navegável a partir do disco ANTES do rebuild,
+    // para que ela já entre no índice de busca. Falha aqui não derruba o boot.
+    if let Err(e) = index_page::generate(&wiki).await {
+        tracing::error!(error = %e, "Falha ao gerar a página de índice no boot");
+    }
+
     rebuild_index(&wiki, &engine).await?;
 
     // Prepara o versionamento git agora que somos primary. Falha no setup
@@ -319,15 +333,41 @@ async fn run_primary_role(
     let (mut event_rx, _watcher) = watcher::WikiWatcher::start(wiki.root().to_path_buf())?;
     tracing::info!("File watcher iniciado");
 
-    while let Some(event) = event_rx.recv().await {
-        // Enfileira a descrição da mudança para o commit (debounced) antes de
-        // reindexar. Eventos não-versionados (log, rawindex, ruído) viram None.
-        if let Some(tx) = &committer {
-            if let Some(desc) = git_sync::commit_description(&event) {
-                let _ = tx.send(desc);
+    // Regeneração da página de índice com debounce: marca "sujo" quando uma
+    // página (que não a própria `index`) muda, e regenera uma única vez quando
+    // os eventos cessam por `INDEX_REGEN_DEBOUNCE`. O filtro do slug `index`
+    // (em `event_dirties_index`) é o que evita o loop regenera→evento→regenera.
+    let mut index_dirty = false;
+    loop {
+        match tokio::time::timeout(INDEX_REGEN_DEBOUNCE, event_rx.recv()).await {
+            Ok(Some(event)) => {
+                // Enfileira a descrição da mudança para o commit (debounced) antes
+                // de reindexar. Eventos não-versionados (log, rawindex, ruído) → None.
+                if let Some(tx) = &committer
+                    && let Some(desc) = git_sync::commit_description(&event)
+                {
+                    let _ = tx.send(desc);
+                }
+                if index_page::event_dirties_index(&event) {
+                    index_dirty = true;
+                }
+                handle_wiki_event(&engine, &wiki, event).await;
+            }
+            // Canal fechado (watcher dropado) — encerra o loop.
+            Ok(None) => break,
+            // Janela de quietude: regenera o índice se algo mudou. Em caso de
+            // erro, limpa o flag mesmo assim (a próxima mudança real re-tenta;
+            // evita retry imediato em falha persistente).
+            Err(_) => {
+                if index_dirty {
+                    match index_page::generate(&wiki).await {
+                        Ok(n) => tracing::debug!(pages = n, "Página de índice regenerada (auto)"),
+                        Err(e) => tracing::error!(error = %e, "Falha ao regenerar a página de índice"),
+                    }
+                    index_dirty = false;
+                }
             }
         }
-        handle_wiki_event(&engine, &wiki, event).await;
     }
 
     tracing::info!("Loop de eventos do watcher encerrado");

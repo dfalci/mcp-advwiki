@@ -69,8 +69,9 @@ use them as inline body links.
 
 - `query_wiki` — BM25 search (`maxPages` default 10, `includeRawReferences` default false).
 - `read_knowledge_uri` / `resources/read` — read one `wiki://...` / `raw://...` URI.
-- `update_page` — create or update; `mode` is `overwrite` or `append`.
-- `propose_page_update` — returns `proposal_id` + unified diff; show the diff to the user before applying.
+- `update_page` — create or update; `mode` is `overwrite` or `append`. Pass the optional `section` (an existing heading title) to edit only that section: `overwrite` replaces its body, `append` adds to its end — the rest of the page is preserved untouched.
+- `set_page_metadata` — edit an existing page's frontmatter without resending the body: `set` for scalar fields (`type`, `project`, `status`, `confidence`, `owner`), `add`/`remove` for list fields (`tags`, `related`, `sources`). Unmentioned fields — including custom ones — are kept; `created_at`/`updated_at` are server-managed and rejected.
+- `propose_page_update` — returns `proposal_id` + unified diff; show the diff to the user before applying. Accepts the same optional `section` (replace-only): `content` is then just the new section body and the diff stays small and focused.
 - `apply_page_update` — apply by `proposalId`; refuses if the page changed since (re-checked via MD5); pass `force: true` to override.
 - `ingest_source` / `ingest_extracted_content` — store raw evidence. `source_id` is MD5 of the URI (stable); re-ingest the same URI needs `force: true`.
 - `delete_page`, `delete_raw_source` — remove content; include `rationale` (logged).
@@ -80,7 +81,6 @@ use them as inline body links.
 - `find_claims`, `find_claims_without_source`, `find_conflicting_claims` — inspect claims.
 - `verify_claim` — re-validate a claim; `claimIndex` is **1-based**.
 - `lint_wiki` — required `scope`: `quick` for everyday hygiene, `all` for full audit (adds stale pages, decisions without rationale, near-duplicates).
-- `rebuild_wiki_index` — regenerate `wiki://page/index` after bulk imports or reorganizations.
 
 ### Quick gotchas
 
@@ -89,6 +89,7 @@ use them as inline body links.
 - **Not readable**: `wiki://list` and `raw://sources` are documented elsewhere but the server does not route them. Use `resources/list` or `list_pages_by_*` to enumerate.
 - **Transparent**: schema migration to wikilinks runs once on boot (backup + log); primary/secondary instance roles are automatic — no agent action needed.
 - **Claim field labels**: use `Source`, `Confidence`, and `Last verified`. The server also accepts localized aliases for legacy content, but new claims must use the English labels.
+- **Section editing**: `section` targets an existing **ATX heading** (`#`..`######`) by title — case-insensitive, with or without the `#`. The page must exist; an unknown or duplicated section name errors out without writing (no silent fallback). A `## X` edit includes its `### Y` subsections.
 
 ---
 
@@ -258,6 +259,13 @@ Use `append` for small additive updates that should not disturb existing content
 Use `overwrite` on an existing page only when the user explicitly requests a full
 replacement or after reviewing the current content.
 
+To change a single section without resending the whole page, pass `section` to
+`update_page` (or `propose_page_update`): `mode: overwrite` replaces that
+section's body, `mode: append` adds to its end. The server reconstructs the rest
+of the page byte-for-byte, so this is the safest choice for a localized edit —
+prefer it over a full `overwrite`, which forces you to reproduce the entire page
+and risks silently dropping content.
+
 ---
 
 ## Minimal page template
@@ -366,8 +374,9 @@ for example:
 - Flows
 - Known bugs
 
-Call `rebuild_wiki_index` after bulk imports, major reorganizations, or when the
-user asks to rebuild/update navigation.
+The navigable index page (`wiki://page/index`, grouped by `type` and `project`)
+is regenerated automatically by the server whenever pages change — there is no
+manual rebuild step and no tool to call.
 
 Use `wiki_graph`, `backlinks`, `orphans`, `related_pages`, and `link_suggestions`
 when the task is to organize, audit, consolidate, or improve wiki navigation.
