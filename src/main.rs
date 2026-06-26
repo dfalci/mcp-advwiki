@@ -1,5 +1,7 @@
 mod change_plan;
 mod claims;
+mod embed_worker;
+mod embeddings;
 mod frontmatter;
 mod git_sync;
 mod graph;
@@ -10,6 +12,7 @@ mod migration;
 mod search;
 mod sections;
 mod storage;
+mod vector_store;
 mod watcher;
 
 use std::error::Error;
@@ -83,6 +86,15 @@ Opcoes:
                      branch's upstream, if any.
   -h, --help         show this help message
 
+Environment (semantic search, optional, opt-in):
+  DD_WIKI_OPENAI_APIKEY   gate: any non-empty value enables hybrid
+                          BM25 + semantic search. Unset = BM25 only.
+  DD_WIKI_OPENAI_BASEURL  OpenAI-compatible embeddings endpoint.
+                          default https://api.openai.com/v1
+                          (point at Ollama/LM Studio/TEI for local).
+  DD_WIKI_OPENAI_MODEL    embedding model. default text-embedding-3-small
+  DD_WIKI_CHUNK_CHARS     page chunk size in chars. default 2000
+
 Claude Desktop configuration (claude_desktop_config.json):
   {
     "mcpServers": {
@@ -94,6 +106,15 @@ Claude Desktop configuration (claude_desktop_config.json):
   }
 "#
 );
+
+/// Contexto da busca semântica quando ligada (gate `DD_WIKI_OPENAI_APIKEY`).
+/// `None` em todo o pipeline quando a feature está desligada → zero regressão.
+#[derive(Clone)]
+struct SemanticContext {
+    cfg: embeddings::SemanticConfig,
+    store: Arc<vector_store::VectorStore>,
+    provider: Arc<dyn embeddings::EmbeddingProvider>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct CliOptions {
@@ -272,14 +293,37 @@ async fn main() -> Result<(), Box<dyn Error>> {
         None
     };
 
+    // Busca semântica opt-in (gate: DD_WIKI_OPENAI_APIKEY). Quando ligada, carrega
+    // o cache de embeddings do disco SEMPRE (inclusive secondary, que só busca) e
+    // prepara o provider. Quando desligada, `semantic` = None e nada disso existe.
+    let semantic: Option<SemanticContext> = match embeddings::SemanticConfig::from_env() {
+        Some(cfg) => {
+            let embeddings_dir = wiki.wiki_dir().join("embeddings");
+            if let Err(e) = std::fs::create_dir_all(&embeddings_dir) {
+                tracing::error!(error = %e, "Falha ao criar diretório de embeddings");
+            }
+            let store = Arc::new(vector_store::VectorStore::load_all(&embeddings_dir));
+            let provider: Arc<dyn embeddings::EmbeddingProvider> =
+                Arc::new(embeddings::OpenAiEmbedder::new(&cfg));
+            tracing::info!(
+                model = %cfg.model,
+                pages_em_cache = store.len(),
+                "Busca semântica ligada"
+            );
+            Some(SemanticContext { cfg, store, provider })
+        }
+        None => None,
+    };
+
     // Conforme o papel detectado pelo engine: a primary assume o índice
     // imediatamente; a secondary fica polling até a primary cair.
     if search_engine.is_primary() {
         let wiki_clone = wiki.clone();
         let engine_clone = search_engine.clone();
         let git_clone = git_sync.clone();
+        let semantic_clone = semantic.clone();
         tokio::spawn(async move {
-            if let Err(e) = run_primary_role(wiki_clone, engine_clone, git_clone).await {
+            if let Err(e) = run_primary_role(wiki_clone, engine_clone, git_clone, semantic_clone).await {
                 tracing::error!(error = %e, "Falha ao executar papel de primary");
             }
         });
@@ -287,13 +331,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let wiki_clone = wiki.clone();
         let engine_clone = search_engine.clone();
         let git_clone = git_sync.clone();
+        let semantic_clone = semantic.clone();
         tokio::spawn(async move {
-            run_secondary_with_failover(wiki_clone, engine_clone, git_clone).await;
+            run_secondary_with_failover(wiki_clone, engine_clone, git_clone, semantic_clone).await;
         });
     }
 
     //inicia o servidor MCP (blockado.. escuta stdin/stdout)
-    let server = mcp_server::AdvWikiMcpServer::new(wiki, search_engine);
+    // Repassa o contexto semântico (store/provider/cfg) ao servidor — o card de
+    // busca híbrida os consome; aqui só são fiados (None quando desligado).
+    let (sem_store, sem_provider, sem_cfg) = match &semantic {
+        Some(s) => (Some(s.store.clone()), Some(s.provider.clone()), Some(s.cfg.clone())),
+        None => (None, None, None),
+    };
+    let server =
+        mcp_server::AdvWikiMcpServer::new(wiki, search_engine, sem_store, sem_provider, sem_cfg);
     server.run().await?;
 
     Ok(())
@@ -308,6 +360,7 @@ async fn run_primary_role(
     wiki: Arc<storage::WikiFileManager>,
     engine: Arc<search::WikiSearchEngine>,
     git_sync: Option<Arc<git_sync::GitSync>>,
+    semantic: Option<SemanticContext>,
 ) -> anyhow::Result<()> {
     // (Re)gera a página de índice navegável a partir do disco ANTES do rebuild,
     // para que ela já entre no índice de busca. Falha aqui não derruba o boot.
@@ -330,6 +383,30 @@ async fn run_primary_role(
         None => None,
     };
 
+    // Indexação semântica (só primary, só quando ligada). Sobe o worker, faz o
+    // scan inicial enfileirando as páginas faltantes/stale (NÃO bloqueia o boot:
+    // o servidor já subiu funcional com BM25) e guarda o canal + store + dir pro
+    // watcher alimentar incrementalmente.
+    let embed_ctx: Option<(
+        tokio::sync::mpsc::UnboundedSender<String>,
+        Arc<vector_store::VectorStore>,
+        PathBuf,
+    )> = match &semantic {
+        Some(sem) => {
+            let tx = embed_worker::spawn_embedder(
+                sem.provider.clone(),
+                sem.store.clone(),
+                wiki.clone(),
+                sem.cfg.clone(),
+            );
+            let queued =
+                embed_worker::enqueue_stale_pages(&wiki, &sem.store, &sem.cfg, &tx).await;
+            tracing::info!("semântica: gerando embeddings de {queued} páginas via API…");
+            Some((tx, sem.store.clone(), wiki.wiki_dir().join("embeddings")))
+        }
+        None => None,
+    };
+
     let (mut event_rx, _watcher) = watcher::WikiWatcher::start(wiki.root().to_path_buf())?;
     tracing::info!("File watcher iniciado");
 
@@ -347,6 +424,21 @@ async fn run_primary_role(
                     && let Some(desc) = git_sync::commit_description(&event)
                 {
                     let _ = tx.send(desc);
+                }
+                // Alimenta a indexação semântica (só quando ligada). Create/Update
+                // enfileiram o slug; Delete apaga o `.bin` e tira do store. O slug
+                // de índice é ignorado pelo próprio worker.
+                if let Some((tx, store, dir)) = &embed_ctx {
+                    match &event {
+                        watcher::WikiEvent::PageCreated { slug }
+                        | watcher::WikiEvent::PageUpdated { slug } => {
+                            let _ = tx.send(slug.clone());
+                        }
+                        watcher::WikiEvent::PageDeleted { slug } => {
+                            embed_worker::handle_delete(store, dir, slug);
+                        }
+                        _ => {}
+                    }
                 }
                 if index_page::event_dirties_index(&event) {
                     index_dirty = true;
@@ -383,6 +475,7 @@ async fn run_secondary_with_failover(
     wiki: Arc<storage::WikiFileManager>,
     engine: Arc<search::WikiSearchEngine>,
     git_sync: Option<Arc<git_sync::GitSync>>,
+    semantic: Option<SemanticContext>,
 ) {
     tracing::info!(
         poll_interval_s = SECONDARY_PROMOTION_POLL_INTERVAL.as_secs(),
@@ -394,7 +487,7 @@ async fn run_secondary_with_failover(
 
         if engine.try_promote_to_primary() {
             tracing::info!("Promovido a primary — assumindo controle do índice");
-            if let Err(e) = run_primary_role(wiki, engine, git_sync).await {
+            if let Err(e) = run_primary_role(wiki, engine, git_sync, semantic).await {
                 tracing::error!(error = %e, "Falha ao executar papel de primary após promoção");
             }
             return;

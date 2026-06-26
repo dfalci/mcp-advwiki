@@ -10,8 +10,10 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+use crate::embeddings::{EmbeddingProvider, SemanticConfig};
 use crate::search::{DocumentKind, WikiSearchEngine};
 use crate::storage::WikiFileManager;
+use crate::vector_store::{RRF_K, SemanticHit, VectorStore, W_BM25, W_SEM, rrf_fuse};
 
 // tipos JSON-RPC
 
@@ -156,16 +158,28 @@ fn guess_mime_from_path(path: &Path) -> Option<String> {
 pub struct AdvWikiMcpServer {
     file_manager: Arc<WikiFileManager>,
     search_engine: Arc<WikiSearchEngine>,
+    // Busca semântica (opt-in). `None` quando `DD_WIKI_OPENAI_APIKEY` ausente.
+    // Quando presentes, `query_wiki` funde BM25 + semântica e `lint_wiki` reporta
+    // o status. Os três andam juntos (todos `Some` ou todos `None`).
+    vector_store: Option<Arc<VectorStore>>,
+    embed_provider: Option<Arc<dyn EmbeddingProvider>>,
+    semantic_cfg: Option<SemanticConfig>,
 }
 
 impl AdvWikiMcpServer {
     pub fn new(
         file_manager: Arc<WikiFileManager>,
         search_engine: Arc<WikiSearchEngine>,
+        vector_store: Option<Arc<VectorStore>>,
+        embed_provider: Option<Arc<dyn EmbeddingProvider>>,
+        semantic_cfg: Option<SemanticConfig>,
     ) -> Self {
         Self {
             file_manager,
             search_engine,
+            vector_store,
+            embed_provider,
+            semantic_cfg,
         }
     }
 
@@ -436,7 +450,7 @@ impl AdvWikiMcpServer {
         let tools = vec![
             McpTool {
                 name: "query_wiki".into(),
-                description: Some("Busca textual na Wiki usando BM25. Retorna as páginas e raw sources relevantes.".into()),
+                description: Some("Busca na Wiki. Por padrão é híbrida (BM25 léxico + semântica) quando a busca semântica está ligada; senão, BM25 puro. Retorna as páginas e raw sources relevantes.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
@@ -446,7 +460,7 @@ impl AdvWikiMcpServer {
                         },
                         "includeRawReferences": {
                             "type": "boolean",
-                            "description": "Se true, inclui raw sources nos resultados",
+                            "description": "Se true, inclui raw sources nos resultados (sempre via BM25)",
                             "default": false
                         },
                         "maxPages": {
@@ -455,6 +469,12 @@ impl AdvWikiMcpServer {
                             "default": 10,
                             "minimum": 1,
                             "maximum": 50
+                        },
+                        "mode": {
+                            "type": "string",
+                            "description": "Estratégia de busca: 'auto' funde BM25 e semântica (recomendado); 'bm25' força só léxico; 'semantic' prioriza significado (cai para BM25 se a semântica estiver indisponível). Sem efeito quando a busca semântica está desligada.",
+                            "enum": ["auto", "bm25", "semantic"],
+                            "default": "auto"
                         }
                     },
                     "required": ["question"]
@@ -962,6 +982,30 @@ impl AdvWikiMcpServer {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("auto");
+
+        // Semântica desligada (qualquer um dos três `None`) ou modo explicitamente
+        // `bm25` → caminho clássico, byte-a-byte idêntico ao de sempre.
+        let semantic_ready = self.vector_store.is_some()
+            && self.embed_provider.is_some()
+            && self.semantic_cfg.is_some();
+        if !semantic_ready || mode == "bm25" {
+            return self.query_wiki_bm25(question, max_pages, include_raw).await;
+        }
+
+        self.query_wiki_hybrid(question, max_pages, include_raw, mode)
+            .await
+    }
+
+    /// Busca BM25 pura — comportamento histórico do `query_wiki`. É o caminho
+    /// quando a semântica está desligada, quando `mode=bm25`, e o fallback de
+    /// degradação quando a query não embeda (auto/semantic caem para cá).
+    async fn query_wiki_bm25(
+        &self,
+        question: &str,
+        max_pages: usize,
+        include_raw: bool,
+    ) -> Result<Vec<McpToolContent>, String> {
         let results = if include_raw {
             self.search_engine.search(question, max_pages)
         } else {
@@ -992,6 +1036,133 @@ impl AdvWikiMcpServer {
             content_type: "text".into(),
             text: lines.join("\n"),
         }])
+    }
+
+    /// Busca híbrida: funde o ranking BM25 de páginas com o ranking semântico
+    /// (cosseno força-bruta) por RRF. RAW continua SÓ BM25 (anexado ao fim).
+    /// Degradação aditiva: query que não embeda cai para o BM25 puro.
+    async fn query_wiki_hybrid(
+        &self,
+        question: &str,
+        max_pages: usize,
+        include_raw: bool,
+        mode: &str,
+    ) -> Result<Vec<McpToolContent>, String> {
+        let store = self.vector_store.as_ref().unwrap();
+        let provider = self.embed_provider.as_ref().unwrap();
+
+        // Top-K alargado em cada lado para a fusão ter material; recortado a
+        // `max_pages` só no fim.
+        let top_k = max_pages.saturating_mul(3).max(max_pages);
+
+        // Lado léxico: SÓ páginas (RAW é tratado à parte).
+        let bm25_pages = self
+            .search_engine
+            .search_with_kind_filter(question, top_k, Some(DocumentKind::Page))
+            .map_err(|e| format!("Search error: {e}"))?;
+
+        // Embeda a query (sem prefixo — o default OpenAI não pede "query:"; a
+        // família E5 pediria, mas não é o caso). Qualquer falha degrada pro BM25.
+        let inputs = [question.to_string()];
+        let query_vec = match provider.embed(&inputs).await {
+            Ok(mut vecs) if vecs.first().map(|v| !v.is_empty()).unwrap_or(false) => vecs.remove(0),
+            Ok(_) => {
+                tracing::warn!("semântica: embed da query vazio — caindo pra BM25");
+                return self.query_wiki_bm25(question, max_pages, include_raw).await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "semântica: falha ao embedar a query — caindo pra BM25");
+                return self.query_wiki_bm25(question, max_pages, include_raw).await;
+            }
+        };
+
+        let sem_hits = store.semantic_search(&query_vec, top_k);
+
+        // mode=semantic mas nada embedado ainda (store vazio) → cai pro BM25.
+        if mode == "semantic" && sem_hits.is_empty() {
+            return self.query_wiki_bm25(question, max_pages, include_raw).await;
+        }
+
+        let bm25_order: Vec<String> = bm25_pages
+            .iter()
+            .filter_map(|r| r.uri.strip_prefix("wiki://page/").map(|s| s.to_string()))
+            .collect();
+        let sem_order: Vec<String> = sem_hits.iter().map(|h| h.slug.clone()).collect();
+
+        let fused: Vec<String> = match mode {
+            "semantic" => sem_order.clone(),
+            _ => rrf_fuse(&bm25_order, &sem_order, RRF_K, W_SEM, W_BM25),
+        };
+
+        let mut lines = Vec::new();
+        lines.push(format!("# Resultados para: \"{}\"\n", question));
+        let mut rank = 0usize;
+
+        for slug in fused.iter().take(max_pages) {
+            let uri = format!("wiki://page/{slug}");
+            let sem_hit = sem_hits.iter().find(|h| &h.slug == slug);
+            let bm25_hit = bm25_pages.iter().find(|r| r.uri == uri);
+            if sem_hit.is_none() && bm25_hit.is_none() {
+                continue; // slug sem fonte — não deveria ocorrer
+            }
+            let title = bm25_hit
+                .map(|r| r.title.clone())
+                .unwrap_or_else(|| slug.replace('-', " "));
+
+            // Prefere o trecho semântico (chunk vencedor, fatiado dos offsets)
+            // quando a página foi encontrada pela semântica; senão, o snippet BM25.
+            let (score, origin, snippet) = if let Some(hit) = sem_hit {
+                let snippet = self
+                    .semantic_snippet(slug, hit)
+                    .await
+                    .or_else(|| bm25_hit.map(|r| r.snippet.clone()))
+                    .unwrap_or_default();
+                (hit.score, "via semântica", snippet)
+            } else {
+                let r = bm25_hit.unwrap();
+                (r.score, "via BM25", r.snippet.clone())
+            };
+
+            rank += 1;
+            lines.push(format!(
+                "## {}. {} (score: {:.2}, {})\n- URI: `{}`\n- Trecho: {}\n",
+                rank, title, score, origin, uri, snippet
+            ));
+        }
+
+        // Raw sources (quando pedidas) continuam SÓ BM25, anexadas após as páginas.
+        if include_raw {
+            let raws = self
+                .search_engine
+                .search_with_kind_filter(question, max_pages, Some(DocumentKind::Raw))
+                .map_err(|e| format!("Search error: {e}"))?;
+            for r in &raws {
+                rank += 1;
+                lines.push(format!(
+                    "## {}. {} (score: {:.2}, via BM25)\n- URI: `{}`\n- Trecho: {}\n",
+                    rank, r.title, r.score, r.uri, r.snippet
+                ));
+            }
+        }
+
+        if rank == 0 {
+            lines.push("Nenhum resultado encontrado.".into());
+        }
+
+        Ok(vec![McpToolContent {
+            content_type: "text".into(),
+            text: lines.join("\n"),
+        }])
+    }
+
+    /// Fatia o chunk vencedor da página (corpo SEM frontmatter) pelos offsets
+    /// guardados no embedding. `None` se a página sumiu ou os offsets ficaram
+    /// fora de alcance (caímos no snippet BM25 nesse caso).
+    async fn semantic_snippet(&self, slug: &str, hit: &SemanticHit) -> Option<String> {
+        let content = self.file_manager.read_page(slug).await.ok()?;
+        let body = crate::frontmatter::strip_frontmatter(&content);
+        body.get(hit.best_start..hit.best_end)
+            .map(|s| s.trim().to_string())
     }
 
     // tool - update_page
@@ -1459,9 +1630,14 @@ impl AdvWikiMcpServer {
             .and_then(|v| v.as_str())
             .ok_or("Missing required arg: scope")?;
 
-        let report = crate::lint::run_lint(scope, &self.file_manager, &self.search_engine)
-            .await
-            .map_err(|e| format!("Lint error: {e}"))?;
+        let report = crate::lint::run_lint(
+            scope,
+            &self.file_manager,
+            &self.search_engine,
+            self.semantic_cfg.as_ref(),
+        )
+        .await
+        .map_err(|e| format!("Lint error: {e}"))?;
 
         Ok(vec![McpToolContent {
             content_type: "text".into(),
@@ -2268,7 +2444,7 @@ mod tests {
             )
             .unwrap();
 
-        let server = AdvWikiMcpServer::new(file_manager, search_engine);
+        let server = AdvWikiMcpServer::new(file_manager, search_engine, None, None, None);
         let response = server
             .tool_query_wiki(&json!({
                 "question": "alpha",
@@ -2296,7 +2472,7 @@ mod tests {
         file_manager.init().await.unwrap();
         let search_engine =
             Arc::new(WikiSearchEngine::new(root.join(".advwiki/index")).unwrap());
-        AdvWikiMcpServer::new(file_manager, search_engine)
+        AdvWikiMcpServer::new(file_manager, search_engine, None, None, None)
     }
 
     #[test]
@@ -2601,7 +2777,7 @@ mod tests {
         let file_manager = Arc::new(WikiFileManager::new(Some(root.clone())));
         file_manager.init().await.unwrap();
         let search_engine = Arc::new(WikiSearchEngine::new(root.join(".advwiki/index")).unwrap());
-        AdvWikiMcpServer::new(file_manager, search_engine)
+        AdvWikiMcpServer::new(file_manager, search_engine, None, None, None)
     }
 
     #[tokio::test]
@@ -2940,5 +3116,223 @@ mod tests {
             .tool_verify_claim(&json!({ "slug": "doc", "claimIndex": 9 }))
             .await
             .is_err());
+    }
+
+    // ── Busca híbrida (BM25 + semântica) ──────────────────────────────────────
+
+    fn semantic_test_cfg() -> SemanticConfig {
+        SemanticConfig::from_values(
+            "k".into(),
+            "http://localhost/v1".into(),
+            "fake-model".into(),
+            2000,
+        )
+    }
+
+    /// Embeda o corpo com o `FakeEmbedder` (determinístico) e insere no store —
+    /// mesmos vetores que o provider do servidor produziria para a query.
+    async fn populate_store(store: &VectorStore, slug: &str, body: &str, cfg: &SemanticConfig) {
+        use crate::embeddings::{EmbeddingProvider, FakeEmbedder, chunk_page};
+        use crate::vector_store::{ChunkVec, PageEmbeddings};
+
+        let stripped = crate::frontmatter::strip_frontmatter(body);
+        let chunks = chunk_page(body, cfg);
+        let texts: Vec<String> = chunks
+            .iter()
+            .map(|c| stripped[c.start..c.end].to_string())
+            .collect();
+        let vectors = FakeEmbedder::new().embed(&texts).await.unwrap();
+        let dim = vectors[0].len() as u32;
+        let chunk_vecs = chunks
+            .iter()
+            .zip(vectors)
+            .map(|(c, vector)| ChunkVec {
+                index: c.index,
+                start: c.start,
+                end: c.end,
+                vector,
+            })
+            .collect();
+        store.upsert(PageEmbeddings {
+            slug: slug.into(),
+            dim,
+            model: cfg.model.clone(),
+            body_hash: "h".into(),
+            chunks: chunk_vecs,
+        });
+    }
+
+    /// Monta wiki + índice BM25 + store. `pages`: (slug, corpo, indexar_no_store).
+    /// Todas as páginas vão para o BM25; só as marcadas vão para o store.
+    async fn semantic_parts(
+        root: &Path,
+        pages: &[(&str, &str, bool)],
+    ) -> (
+        Arc<WikiFileManager>,
+        Arc<WikiSearchEngine>,
+        Arc<VectorStore>,
+        SemanticConfig,
+    ) {
+        let fm = Arc::new(WikiFileManager::new(Some(root.to_path_buf())));
+        fm.init().await.unwrap();
+        let engine = Arc::new(WikiSearchEngine::new(root.join(".advwiki/index")).unwrap());
+        let store = Arc::new(VectorStore::new());
+        let cfg = semantic_test_cfg();
+
+        for (slug, body, in_store) in pages {
+            fm.write_page(slug, body).await.unwrap();
+            engine
+                .index_document(
+                    DocumentKind::Page,
+                    &format!("wiki://page/{slug}"),
+                    &slug.replace('-', " "),
+                    body,
+                    1000,
+                )
+                .unwrap();
+            if *in_store {
+                populate_store(&store, slug, body, &cfg).await;
+            }
+        }
+        (fm, engine, store, cfg)
+    }
+
+    // Página "lexical" casa o termo `qwxz` (BM25); a query tem composição de
+    // bytes próxima de "semantico" (muitos 'a'/'s') → cosseno favorece a segunda.
+    const PAGE_LEXICAL: (&str, &str, bool) = ("lexical", "qwxz qwxz qwxz qwxz", true);
+    const PAGE_SEMANTIC: (&str, &str, bool) =
+        ("semantico", "asa asa asa asa asa asa asa asa asa asa", true);
+    const HYBRID_QUERY: &str = "qwxz aaaaaaaa ssssssss";
+
+    #[tokio::test]
+    async fn test_query_semantic_mode_ranks_by_meaning() {
+        let dir = TempDir::new().unwrap();
+        let (fm, engine, store, cfg) =
+            semantic_parts(dir.path(), &[PAGE_LEXICAL, PAGE_SEMANTIC]).await;
+        let provider: Arc<dyn EmbeddingProvider> = Arc::new(crate::embeddings::FakeEmbedder::new());
+        let server = AdvWikiMcpServer::new(fm, engine, Some(store), Some(provider), Some(cfg));
+
+        let resp = server
+            .tool_query_wiki(&json!({ "question": HYBRID_QUERY, "mode": "semantic" }))
+            .await
+            .unwrap();
+        let text = &resp[0].text;
+
+        let pos_b = text
+            .find("wiki://page/semantico")
+            .expect("página semântica ausente");
+        let pos_a = text.find("wiki://page/lexical");
+        assert!(
+            pos_a.map(|a| pos_b < a).unwrap_or(true),
+            "semântica deveria rankear 'semantico' antes de 'lexical':\n{text}"
+        );
+        assert!(text.contains("via semântica"));
+    }
+
+    #[tokio::test]
+    async fn test_query_bm25_mode_stays_lexical() {
+        let dir = TempDir::new().unwrap();
+        let (fm, engine, store, cfg) =
+            semantic_parts(dir.path(), &[PAGE_LEXICAL, PAGE_SEMANTIC]).await;
+        let provider: Arc<dyn EmbeddingProvider> = Arc::new(crate::embeddings::FakeEmbedder::new());
+        let server = AdvWikiMcpServer::new(fm, engine, Some(store), Some(provider), Some(cfg));
+
+        let resp = server
+            .tool_query_wiki(&json!({ "question": HYBRID_QUERY, "mode": "bm25" }))
+            .await
+            .unwrap();
+        let text = &resp[0].text;
+
+        // Só 'lexical' casa o termo; caminho clássico, sem anotação de origem.
+        assert!(text.contains("wiki://page/lexical"));
+        assert!(!text.contains("wiki://page/semantico"));
+        assert!(!text.contains("via semântica") && !text.contains("via BM25"));
+    }
+
+    #[tokio::test]
+    async fn test_query_auto_fuses_both_rankings() {
+        let dir = TempDir::new().unwrap();
+        let (fm, engine, store, cfg) =
+            semantic_parts(dir.path(), &[PAGE_LEXICAL, PAGE_SEMANTIC]).await;
+        let provider: Arc<dyn EmbeddingProvider> = Arc::new(crate::embeddings::FakeEmbedder::new());
+        let server = AdvWikiMcpServer::new(fm, engine, Some(store), Some(provider), Some(cfg));
+
+        // mode omitido → default 'auto'.
+        let resp = server
+            .tool_query_wiki(&json!({ "question": HYBRID_QUERY }))
+            .await
+            .unwrap();
+        let text = &resp[0].text;
+
+        assert!(text.contains("wiki://page/lexical"), "BM25 deve contribuir:\n{text}");
+        assert!(text.contains("wiki://page/semantico"), "semântica deve contribuir:\n{text}");
+    }
+
+    #[tokio::test]
+    async fn test_query_falls_back_to_bm25_when_embed_fails() {
+        let dir = TempDir::new().unwrap();
+        let (fm, engine, store, cfg) =
+            semantic_parts(dir.path(), &[PAGE_LEXICAL, PAGE_SEMANTIC]).await;
+        // Provider que sempre falha → a query não embeda → degrada pra BM25.
+        let provider: Arc<dyn EmbeddingProvider> = Arc::new(crate::embeddings::FakeEmbedder::failing(
+            crate::embeddings::EmbedError::Transient("sem rede".into()),
+        ));
+        let server = AdvWikiMcpServer::new(fm, engine, Some(store), Some(provider), Some(cfg));
+
+        let resp = server
+            .tool_query_wiki(&json!({ "question": HYBRID_QUERY, "mode": "semantic" }))
+            .await
+            .expect("falha de embed deve degradar, não erro");
+        let text = &resp[0].text;
+
+        assert!(text.contains("wiki://page/lexical"));
+        assert!(!text.contains("via semântica"), "não deveria haver trecho semântico:\n{text}");
+    }
+
+    #[tokio::test]
+    async fn test_query_page_without_embedding_still_appears_via_bm25() {
+        let dir = TempDir::new().unwrap();
+        let (fm, engine, store, cfg) = semantic_parts(
+            dir.path(),
+            &[
+                PAGE_LEXICAL,
+                ("noembed", "ccccc ccccc ccccc", false), // só no BM25
+            ],
+        )
+        .await;
+        let provider: Arc<dyn EmbeddingProvider> = Arc::new(crate::embeddings::FakeEmbedder::new());
+        let server = AdvWikiMcpServer::new(fm, engine, Some(store), Some(provider), Some(cfg));
+
+        let resp = server
+            .tool_query_wiki(&json!({ "question": "ccccc", "mode": "auto" }))
+            .await
+            .unwrap();
+        let text = &resp[0].text;
+        assert!(
+            text.contains("wiki://page/noembed"),
+            "página sem embedding deve aparecer via BM25 (aditivo):\n{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_query_semantic_disabled_output_is_classic() {
+        let dir = TempDir::new().unwrap();
+        let (fm, engine, _store, _cfg) =
+            semantic_parts(dir.path(), &[("lexical", "qwxz qwxz", false)]).await;
+        // Semântica desligada (todos None) → caminho clássico, saída de sempre.
+        let server = AdvWikiMcpServer::new(fm, engine, None, None, None);
+
+        let resp = server
+            .tool_query_wiki(&json!({ "question": "qwxz", "mode": "auto" }))
+            .await
+            .unwrap();
+        let text = &resp[0].text;
+
+        assert!(text.contains("# Resultados para:"));
+        assert!(text.contains("wiki://page/lexical"));
+        assert!(
+            !text.contains("via semântica") && !text.contains("via BM25"),
+            "caminho clássico não anota origem:\n{text}"
+        );
     }
 }

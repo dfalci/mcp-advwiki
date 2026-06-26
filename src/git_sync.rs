@@ -33,6 +33,7 @@ const DEBOUNCE: Duration = Duration::from_secs(3);
 const GITIGNORE_CONTENTS: &str = "\
 # Gerado pelo AdvWiki (--autocommit). Versiona apenas conteúdo útil.
 index/
+embeddings/
 proposals/
 .backup-pre-wikilinks-*/
 *.tmp
@@ -312,6 +313,7 @@ mod tests {
         assert!(wiki_dir.join(".git").exists(), "deveria existir .git");
         let gitignore = std::fs::read_to_string(wiki_dir.join(".gitignore")).unwrap();
         assert!(gitignore.contains("index/"));
+        assert!(gitignore.contains("embeddings/"));
         assert!(gitignore.contains("proposals/"));
         assert!(gitignore.contains(".backup-pre-wikilinks-*/"));
 

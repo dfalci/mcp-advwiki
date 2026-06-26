@@ -67,7 +67,7 @@ use them as inline body links.
 
 ## Available AdvWiki tools
 
-- `query_wiki` — BM25 search (`maxPages` default 10, `includeRawReferences` default false).
+- `query_wiki` — search (`maxPages` default 10, `includeRawReferences` default false). BM25 by default; **hybrid BM25+semantic, with semantic preferred, when semantic search is enabled** on the server (opt-in via `DD_WIKI_OPENAI_APIKEY`). Optional `mode`: `auto` (default, hybrid), `bm25` (force lexical), `semantic` (prefer meaning, falls back to BM25). Only pages are embedded — raw sources stay BM25-only.
 - `read_knowledge_uri` / `resources/read` — read one `wiki://...` / `raw://...` URI.
 - `update_page` — create or update; `mode` is `overwrite` or `append`. Pass the optional `section` (an existing heading title) to edit only that section: `overwrite` replaces its body, `append` adds to its end — the rest of the page is preserved untouched.
 - `set_page_metadata` — edit an existing page's frontmatter without resending the body: `set` for scalar fields (`type`, `project`, `status`, `confidence`, `owner`), `add`/`remove` for list fields (`tags`, `related`, `sources`). Unmentioned fields — including custom ones — are kept; `created_at`/`updated_at` are server-managed and rejected.
@@ -80,7 +80,7 @@ use them as inline body links.
 - `wiki_graph` (`format`: `summary` | `full` | `mermaid`), `backlinks`, `orphans`, `related_pages`, `link_suggestions` — navigation.
 - `find_claims`, `find_claims_without_source`, `find_conflicting_claims` — inspect claims.
 - `verify_claim` — re-validate a claim; `claimIndex` is **1-based**.
-- `lint_wiki` — required `scope`: `quick` for everyday hygiene, `all` for full audit (adds stale pages, decisions without rationale, near-duplicates).
+- `lint_wiki` — required `scope`: `quick` for everyday hygiene, `all` for full audit (adds stale pages, decisions without rationale, near-duplicates). Also reports a **Semantic search** status line (enabled/disabled, model, and embedding coverage as `N/M pages`).
 
 ### Quick gotchas
 
@@ -124,11 +124,13 @@ query_wiki(
 Use `includeRawReferences: true` only for audits, source checking, wiki updates,
 conflict analysis, or when the user asks for traceability.
 
-AdvWiki search is BM25/Tantivy, not semantic search. Prefer short queries with
-exact terms: service names, modules, technologies, tables, queues, endpoints,
-classes, configuration keys, and exact errors. If results are weak, retry with
-useful variations, including alternative spellings or language variants that
-match how the content was originally written.
+AdvWiki search is BM25/Tantivy by default (lexical). When semantic search is
+enabled on the server (opt-in via `DD_WIKI_OPENAI_APIKEY`), `query_wiki` becomes
+hybrid and also matches by meaning. Either way, prefer short queries with exact
+terms: service names, modules, technologies, tables, queues, endpoints, classes,
+configuration keys, and exact errors. If results are weak, retry with useful
+variations, including alternative spellings or language variants that match how
+the content was originally written.
 
 Do at most 5 additional searches. Stop earlier if the recovered context is enough.
 

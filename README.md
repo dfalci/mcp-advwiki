@@ -300,6 +300,60 @@ wiki_graph
 
 ---
 
+## Semantic search (optional)
+
+By default, search is **BM25 only** — lexical, exact-term matching. AdvWiki can also add a **semantic** layer: pages are embedded into vectors and queries are matched by meaning, which recovers content even when you ask with different words than were originally written. This matters for "AI memory" use, where the agent that writes and the agent that searches rarely use the same vocabulary, and where most content is non-English.
+
+Semantic search is **opt-in and purely additive**:
+
+- it is **off** unless `DD_WIKI_OPENAI_APIKEY` is set — with it off, behavior is identical to today;
+- when on, `query_wiki` becomes **hybrid**: BM25 and semantic results are fused, with semantic preferred;
+- a page with no embedding yet still appears via BM25 — the semantic layer only ever adds recall, never removes it.
+
+### How to enable
+
+Set a single environment variable in the AdvWiki process — that is the trigger:
+
+```bash
+export DD_WIKI_OPENAI_APIKEY=sk-...
+```
+
+Embeddings are produced by an external **OpenAI-compatible** API (`POST /v1/embeddings`). There is no local model and no bundled ONNX runtime. The same contract works with OpenAI and with local servers (Ollama, LM Studio, TEI) — just point the base URL at them:
+
+```bash
+# Example: a local embedding server
+export DD_WIKI_OPENAI_APIKEY=local            # any non-empty value to flip the gate
+export DD_WIKI_OPENAI_BASEURL=http://localhost:11434/v1
+export DD_WIKI_OPENAI_MODEL=nomic-embed-text
+```
+
+### Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DD_WIKI_OPENAI_APIKEY` | _(unset)_ | **Gate**: any non-empty value enables semantic search. |
+| `DD_WIKI_OPENAI_BASEURL` | `https://api.openai.com/v1` | Base URL of the OpenAI-compatible embeddings API. |
+| `DD_WIKI_OPENAI_MODEL` | `text-embedding-3-small` | Embedding model to request. |
+| `DD_WIKI_CHUNK_CHARS` | `2000` | Target chunk size, in characters, for splitting pages before embedding. |
+
+The vector dimension is auto-detected from the API response and recorded with each page's embedding — there is no dimension variable to set.
+
+### What gets embedded
+
+- **Only curated pages** are embedded. Raw sources (`raw://source/...`) remain BM25-only.
+- Embeddings are cached on disk under `.advwiki/embeddings/{slug}.bin` and are rebuildable, so they are git-ignored (like the Tantivy `index/`). They are gated by a hash of the page body, so a change that only touches `updated_at` does not re-embed.
+
+### Cost note
+
+The **first activation on an existing wiki embeds every page** through the API, which incurs one batch of embedding calls. After that, only new or changed pages are embedded. Enabling never blocks startup: AdvWiki serves BM25 immediately and populates embeddings in the background.
+
+### Controlling and inspecting it
+
+- `query_wiki` accepts an optional `mode` argument: `auto` (default — hybrid fusion), `bm25` (force lexical only), or `semantic` (prefer meaning, falling back to BM25 when semantic results are unavailable). When semantic search is off, `mode` has no effect.
+- `lint_wiki` reports a **Semantic search** status line: whether it is enabled, the model in use, and how many pages have embeddings (`N/M pages`).
+
+---
+
 ## Directory layout
 
 AdvWiki creates and manages this structure under the selected root:
@@ -312,6 +366,7 @@ AdvWiki creates and manages this structure under the selected root:
     metadata/     # JSON metadata for raw sources
     proposals/    # reviewable page update proposals
     index/        # Tantivy index, rebuilt automatically
+    embeddings/   # semantic vectors (only if semantic search is enabled), rebuildable
   .advwikilog.md  # operational log
   rawindex.md     # readable index of raw sources
 ```
@@ -418,7 +473,7 @@ Do not use legacy `[Text](wiki://page/slug)` links in page bodies. New content s
 
 | Tool | Purpose |
 |---|---|
-| `query_wiki` | Search pages and optionally raw sources with BM25 |
+| `query_wiki` | Search pages and optionally raw sources — BM25, or hybrid BM25+semantic when semantic search is enabled (`mode`: `auto`/`bm25`/`semantic`) |
 | `read_knowledge_uri` | Read `wiki://...` or `raw://...` content |
 | MCP resources | Passive resource listing and reading through the MCP client |
 

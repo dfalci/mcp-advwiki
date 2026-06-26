@@ -18,10 +18,12 @@
 //     - decisões sem rationale (slug com padrão de decisão + sem seção de justificativa)
 //     - páginas similares (Jaccard de tokens > SIMILARITY_THRESHOLD — candidatas a duplicata)
 
+use crate::embeddings::SemanticConfig;
 use crate::graph::extract_wiki_page_links;
 use crate::search::WikiSearchEngine;
 use crate::storage::WikiFileManager;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 const LARGE_PAGE_THRESHOLD_BYTES: usize = 50_000;
 const STALE_DAYS_THRESHOLD: i64 = 90;
@@ -58,6 +60,19 @@ pub struct SimilarPagePair {
     pub similarity: f32,
 }
 
+/// Status da busca semântica para o relatório de lint.
+pub enum SemanticLintStatus {
+    /// Feature desligada (sem `DD_WIKI_OPENAI_APIKEY`).
+    Disabled,
+    /// Ligada: `model` em uso e `with_embeddings`/`total_pages` (nº de `.bin`
+    /// em `.advwiki/embeddings/` sobre o nº de páginas, excluindo o índice).
+    Enabled {
+        model: String,
+        with_embeddings: usize,
+        total_pages: usize,
+    },
+}
+
 pub struct LintReport {
     pub scope: String,
     // resumo
@@ -77,6 +92,8 @@ pub struct LintReport {
     pub stale_pages: Vec<String>,
     pub decisions_without_rationale: Vec<String>,
     pub similar_pages: Vec<SimilarPagePair>,
+    // status da busca semântica (independe do scope)
+    pub semantic: SemanticLintStatus,
 }
 
 impl LintReport {
@@ -101,6 +118,20 @@ impl LintReport {
                 "- Índice: warn ({} documentos no disco vs {} no índice)",
                 expected, self.index_doc_count
             ));
+        }
+        lines.push("".into());
+
+        // busca semântica
+        lines.push("## Busca semântica\n".into());
+        match &self.semantic {
+            SemanticLintStatus::Enabled {
+                model,
+                with_embeddings,
+                total_pages,
+            } => lines.push(format!(
+                "- Status: ligada (modelo {model}) — {with_embeddings}/{total_pages} páginas com embedding"
+            )),
+            SemanticLintStatus::Disabled => lines.push("- Status: desligada".into()),
         }
         lines.push("".into());
 
@@ -227,6 +258,7 @@ pub async fn run_lint(
     scope: &str,
     file_manager: &WikiFileManager,
     search_engine: &WikiSearchEngine,
+    semantic_cfg: Option<&SemanticConfig>,
 ) -> anyhow::Result<LintReport> {
     // carrega todas as páginas e conteúdos
     let slugs = file_manager.list_pages().await?;
@@ -346,6 +378,25 @@ pub async fn run_lint(
         (Vec::new(), Vec::new(), Vec::new())
     };
 
+    // status da busca semântica: N = nº de `.bin` em `.advwiki/embeddings/`;
+    // M = nº de páginas excluindo o slug de índice.
+    let semantic = match semantic_cfg {
+        Some(cfg) => {
+            let embeddings_dir = file_manager.wiki_dir().join("embeddings");
+            let with_embeddings = count_embedding_bins(&embeddings_dir);
+            let total_pages = page_set
+                .iter()
+                .filter(|s| s.as_str() != crate::index_page::INDEX_SLUG)
+                .count();
+            SemanticLintStatus::Enabled {
+                model: cfg.model.clone(),
+                with_embeddings,
+                total_pages,
+            }
+        }
+        None => SemanticLintStatus::Disabled,
+    };
+
     Ok(LintReport {
         scope: scope.to_string(),
         page_count,
@@ -361,10 +412,23 @@ pub async fn run_lint(
         stale_pages,
         decisions_without_rationale,
         similar_pages,
+        semantic,
     })
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Conta os arquivos `*.bin` em `dir` (páginas com embedding). Diretório
+/// ausente ou ilegível → 0.
+fn count_embedding_bins(dir: &Path) -> usize {
+    match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("bin"))
+            .count(),
+        Err(_) => 0,
+    }
+}
 
 async fn check_stale_pages(
     file_manager: &WikiFileManager,
@@ -706,7 +770,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let fm = make_manager(dir.path().to_path_buf()).await;
         let engine = make_engine(dir.path());
-        let report = run_lint("quick", &fm, &engine).await.unwrap();
+        let report = run_lint("quick", &fm, &engine, None).await.unwrap();
 
         assert_eq!(report.page_count, 0);
         assert!(report.broken_links.is_empty());
@@ -724,7 +788,7 @@ mod tests {
 
         fm.write_page("home", "veja wiki://page/inexistente").await.unwrap();
 
-        let report = run_lint("quick", &fm, &engine).await.unwrap();
+        let report = run_lint("quick", &fm, &engine, None).await.unwrap();
         assert_eq!(report.broken_links.len(), 1);
         assert_eq!(report.broken_links[0].source_slug, "home");
         assert_eq!(report.broken_links[0].target_slug, "inexistente");
@@ -739,7 +803,7 @@ mod tests {
         fm.write_page("home", "veja wiki://page/about").await.unwrap();
         fm.write_page("about", "sobre nós").await.unwrap();
 
-        let report = run_lint("quick", &fm, &engine).await.unwrap();
+        let report = run_lint("quick", &fm, &engine, None).await.unwrap();
         assert!(report.broken_links.is_empty());
     }
 
@@ -752,7 +816,7 @@ mod tests {
         fm.write_page("home", "conteúdo sem links").await.unwrap();
         fm.write_page("orphan", "sou um órfão").await.unwrap();
 
-        let report = run_lint("quick", &fm, &engine).await.unwrap();
+        let report = run_lint("quick", &fm, &engine, None).await.unwrap();
         assert!(report.orphan_pages.contains(&"home".to_string()));
         assert!(report.orphan_pages.contains(&"orphan".to_string()));
     }
@@ -766,7 +830,7 @@ mod tests {
         fm.write_page("home", "veja wiki://page/about").await.unwrap();
         fm.write_page("about", "sobre nós").await.unwrap();
 
-        let report = run_lint("quick", &fm, &engine).await.unwrap();
+        let report = run_lint("quick", &fm, &engine, None).await.unwrap();
         assert!(!report.orphan_pages.contains(&"about".to_string()));
         assert!(report.orphan_pages.contains(&"home".to_string()));
     }
@@ -780,7 +844,7 @@ mod tests {
         let meta = crate::storage::RawSourceMetadata::new("abc123".into(), 10);
         fm.write_raw_source("abc123", &meta, "conteúdo bruto").await.unwrap();
 
-        let report = run_lint("quick", &fm, &engine).await.unwrap();
+        let report = run_lint("quick", &fm, &engine, None).await.unwrap();
         assert!(report.raw_without_pages.contains(&"abc123".to_string()));
     }
 
@@ -794,7 +858,7 @@ mod tests {
         fm.write_raw_source("abc123", &meta, "conteúdo bruto").await.unwrap();
         fm.write_page("home", "baseado na source abc123").await.unwrap();
 
-        let report = run_lint("quick", &fm, &engine).await.unwrap();
+        let report = run_lint("quick", &fm, &engine, None).await.unwrap();
         assert!(!report.raw_without_pages.contains(&"abc123".to_string()));
     }
 
@@ -807,7 +871,7 @@ mod tests {
         let large_content = "A".repeat(LARGE_PAGE_THRESHOLD_BYTES + 1);
         fm.write_page("huge", &large_content).await.unwrap();
 
-        let report = run_lint("quick", &fm, &engine).await.unwrap();
+        let report = run_lint("quick", &fm, &engine, None).await.unwrap();
         assert_eq!(report.large_pages.len(), 1);
         assert_eq!(report.large_pages[0].slug, "huge");
     }
@@ -826,7 +890,7 @@ mod tests {
         .await
         .unwrap();
 
-        let report = run_lint("quick", &fm, &engine).await.unwrap();
+        let report = run_lint("quick", &fm, &engine, None).await.unwrap();
         assert!(report.missing_see_also.contains(&"no-see-also".to_string()));
         assert!(!report.missing_see_also.contains(&"has-see-also".to_string()));
     }
@@ -839,7 +903,7 @@ mod tests {
 
         fm.write_page("english", "content\n\n## See also\n- link").await.unwrap();
 
-        let report = run_lint("quick", &fm, &engine).await.unwrap();
+        let report = run_lint("quick", &fm, &engine, None).await.unwrap();
         assert!(!report.missing_see_also.contains(&"english".to_string()));
     }
 
@@ -852,7 +916,7 @@ mod tests {
         fm.write_page("no-fm", "# Sem frontmatter\n\nConteúdo.").await.unwrap();
         fm.write_page("has-fm", "---\ntype: note\n---\n\n# Com frontmatter").await.unwrap();
 
-        let report = run_lint("quick", &fm, &engine).await.unwrap();
+        let report = run_lint("quick", &fm, &engine, None).await.unwrap();
         assert!(report.missing_frontmatter.contains(&"no-fm".to_string()));
         assert!(!report.missing_frontmatter.contains(&"has-fm".to_string()));
     }
@@ -864,7 +928,7 @@ mod tests {
         let engine = make_engine(dir.path());
 
         fm.write_page("page-a", "conteúdo").await.unwrap();
-        let report = run_lint("quick", &fm, &engine).await.unwrap();
+        let report = run_lint("quick", &fm, &engine, None).await.unwrap();
         assert!(!report.index_consistent);
     }
 
@@ -878,7 +942,7 @@ mod tests {
             .await
             .unwrap();
 
-        let report = run_lint("all", &fm, &engine).await.unwrap();
+        let report = run_lint("all", &fm, &engine, None).await.unwrap();
         assert!(report
             .decisions_without_rationale
             .contains(&"decisao-usar-redis".to_string()));
@@ -897,7 +961,7 @@ mod tests {
         .await
         .unwrap();
 
-        let report = run_lint("all", &fm, &engine).await.unwrap();
+        let report = run_lint("all", &fm, &engine, None).await.unwrap();
         assert!(report.decisions_without_rationale.is_empty());
     }
 
@@ -914,7 +978,7 @@ mod tests {
         fm.write_page("page-original", &content).await.unwrap();
         fm.write_page("page-duplicada", &content).await.unwrap();
 
-        let report = run_lint("all", &fm, &engine).await.unwrap();
+        let report = run_lint("all", &fm, &engine, None).await.unwrap();
         assert_eq!(report.similar_pages.len(), 1);
         assert!((report.similar_pages[0].similarity - 1.0).abs() < 0.01);
     }
@@ -929,7 +993,7 @@ mod tests {
             .await
             .unwrap();
 
-        let report = run_lint("quick", &fm, &engine).await.unwrap();
+        let report = run_lint("quick", &fm, &engine, None).await.unwrap();
         // scope quick não executa checks de "all"
         assert!(report.decisions_without_rationale.is_empty());
         assert!(report.similar_pages.is_empty());
@@ -942,7 +1006,7 @@ mod tests {
         let fm = make_manager(dir.path().to_path_buf()).await;
         let engine = make_engine(dir.path());
 
-        let report = run_lint("all", &fm, &engine).await.unwrap();
+        let report = run_lint("all", &fm, &engine, None).await.unwrap();
         let md = report.format_markdown();
 
         assert!(md.contains("# Relatório de Lint da Wiki"));
@@ -956,5 +1020,67 @@ mod tests {
         assert!(md.contains("## Páginas Desatualizadas"));
         assert!(md.contains("## Decisões sem Rationale"));
         assert!(md.contains("## Páginas Similares"));
+        assert!(md.contains("## Busca semântica"));
+    }
+
+    // ── status da busca semântica ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_lint_semantic_status_disabled() {
+        let dir = TempDir::new().unwrap();
+        let fm = make_manager(dir.path().to_path_buf()).await;
+        let engine = make_engine(dir.path());
+
+        let report = run_lint("quick", &fm, &engine, None).await.unwrap();
+        let md = report.format_markdown();
+        assert!(md.contains("## Busca semântica"));
+        assert!(md.contains("- Status: desligada"));
+    }
+
+    #[tokio::test]
+    async fn test_lint_semantic_status_enabled_reports_n_over_m() {
+        use crate::vector_store::{ChunkVec, PageEmbeddings, write_page_embeddings};
+
+        let dir = TempDir::new().unwrap();
+        let fm = make_manager(dir.path().to_path_buf()).await;
+        let engine = make_engine(dir.path());
+
+        // 2 páginas reais; só uma com `.bin` → N=1, M=2.
+        fm.write_page("alpha", "conteúdo alpha").await.unwrap();
+        fm.write_page("beta", "conteúdo beta").await.unwrap();
+
+        let embeddings_dir = fm.wiki_dir().join("embeddings");
+        std::fs::create_dir_all(&embeddings_dir).unwrap();
+        write_page_embeddings(
+            &embeddings_dir.join("alpha.bin"),
+            &PageEmbeddings {
+                slug: "alpha".into(),
+                dim: 2,
+                model: "fake-model".into(),
+                body_hash: "h".into(),
+                chunks: vec![ChunkVec {
+                    index: 0,
+                    start: 0,
+                    end: 1,
+                    vector: vec![1.0, 0.0],
+                }],
+            },
+        )
+        .unwrap();
+
+        let cfg = SemanticConfig::from_values(
+            "k".into(),
+            "http://localhost/v1".into(),
+            "fake-model".into(),
+            2000,
+        );
+        let report = run_lint("quick", &fm, &engine, Some(&cfg)).await.unwrap();
+        let md = report.format_markdown();
+
+        assert!(md.contains("## Busca semântica"));
+        assert!(
+            md.contains("ligada (modelo fake-model) — 1/2 páginas com embedding"),
+            "status inesperado:\n{md}"
+        );
     }
 }
