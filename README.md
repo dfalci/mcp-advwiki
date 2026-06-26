@@ -2,7 +2,7 @@
 
 AdvWiki is a local MCP server that gives coding agents a durable, searchable memory for a software project.
 
-It stores project knowledge as Markdown files, indexes them with BM25 full-text search, and exposes them to MCP clients as tools and resources. The goal is simple: when an AI assistant learns something important about your system, it should not disappear when the chat ends.
+It stores project knowledge as Markdown files, indexes them for full-text search (BM25, with an optional semantic layer), and exposes them to MCP clients as tools and resources. The goal is simple: when an AI assistant learns something important about your system, it should not disappear when the chat ends.
 
 Use it for architecture notes, service descriptions, decisions, integration patterns, investigated bugs, runbooks, raw evidence, and project conventions.
 
@@ -39,7 +39,7 @@ It is not meant to replace source code, logs, tests, or official documentation. 
 ## What you get
 
 - **Searchable Markdown wiki** — pages live under `.advwiki/pages/`.
-- **BM25 full-text search** — powered by Tantivy, useful for exact technical terms, service names, errors, queues, endpoints, and config keys.
+- **Hybrid search** — BM25 full-text (Tantivy) for exact technical terms, service names, errors, queues, endpoints, and config keys, plus an **optional semantic layer** that matches by meaning when enabled (see [Semantic search](#semantic-search-optional)).
 - **MCP tools and resources** — agents can search, read, create, update, lint, and organize the wiki.
 - **Raw evidence store** — logs, extracted files, specs, API snippets, and long pasted content can be stored separately from curated pages.
 - **Frontmatter metadata** — pages can declare `type`, `project`, `status`, `tags`, `sources`, `related`, `confidence`, and `owner`.
@@ -262,7 +262,7 @@ gateway authentication jwt
 staging feature flag invoice
 ```
 
-BM25 is not semantic search. Exact names, errors, and technical terms matter.
+By default, search is BM25 — exact names, errors, and technical terms matter most. With the optional semantic layer enabled (see [Semantic search](#semantic-search-optional)), paraphrased and conceptual questions work too, but exact terms still help.
 
 ### When writing to the wiki
 

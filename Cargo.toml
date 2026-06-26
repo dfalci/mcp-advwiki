@@ -1,8 +1,8 @@
 [package]
 name = "mcp-advwiki"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
-description = "A local wiki with BM25 search, made for AIs and MCP clients. Good for microservice architecture documentation and knowledge bases."
+description = "A local wiki with hybrid BM25 + optional semantic search, made for AIs and MCP clients. Good for microservice architecture documentation and knowledge bases."
 license = "MIT"
 readme = "README.md"
 homepage = "https://github.com/dfalci/mcp-advwiki"

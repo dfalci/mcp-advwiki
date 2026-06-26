@@ -648,7 +648,9 @@ For an architectural software wiki, this feature could become a major differenti
 
 ---
 
-## 11. Prepare optional hybrid search
+## ~~11. Prepare optional hybrid search~~ ✅ Implemented
+
+> **Status:** Implemented — `query_wiki` is now hybrid when semantic search is enabled (opt-in via `DD_WIKI_OPENAI_APIKEY`). Pages are embedded into vectors via an OpenAI-compatible API and fused with BM25 through RRF (semantic-preferred); the tool accepts the optional `mode` argument (`auto`/`bm25`/`semantic`), and `lint_wiki` reports embedding coverage. See the "Semantic search" section of the README. The natural follow-up — generating vectors **locally** by default instead of through an external API — is tracked as #14 below.
 
 ### Goal
 
@@ -806,6 +808,33 @@ This could become one of the most interesting features in the project, especiall
 
 ---
 
+## 14. Local embedding generation by default (no external API)
+
+> **Follow-up to #11.** Today semantic search depends on an external OpenAI-compatible API (`DD_WIKI_OPENAI_APIKEY`), which means a network round-trip, an API key, and per-embedding cost on the first activation of a wiki.
+
+### Goal
+
+Generate embeddings **locally by default**, with no external service, using a Rust-native, ONNX-based embedding library such as [`fastembed`](https://github.com/Anush008/fastembed-rs) (Qdrant's FastEmbed). The model runs in-process on CPU; the existing OpenAI-compatible provider becomes an **optional** alternative rather than the only way to turn semantic search on.
+
+### Why this matters
+
+- **Zero-config**: semantic search works out of the box, without an API key or a running local server (Ollama/LM Studio/TEI).
+- **No per-call cost and no data leaving the machine** — a better fit for "AI memory", which is private project knowledge.
+- **Offline**: indexing and querying do not depend on connectivity.
+
+### Design notes
+
+- Reuse the existing `EmbeddingProvider` trait (`src/embeddings.rs`): add a `LocalEmbedder` implementation alongside `OpenAiEmbedder`. The `vector_store`/`.bin` format, the RRF fusion, the per-page hash gate, and the indexing worker stay unchanged — only the provider is swapped.
+- Default to local; fall back to (or allow overriding with) the OpenAI-compatible API via the current `DD_WIKI_*` env vars.
+- The `.bin` header already records the model name and auto-detected dimension, so switching providers/models invalidates stale embeddings and triggers a clean re-embed.
+- Decide model download/caching strategy and binary-size impact (ONNX runtime), and keep semantic search opt-in/opt-out predictable.
+
+### Priority
+
+Medium — high value for adoption (removes the API dependency), gated on the binary-size and model-distribution trade-offs.
+
+---
+
 # Suggested implementation order
 
 ## Phase 1 — Wiki foundation
@@ -829,9 +858,10 @@ This could become one of the most interesting features in the project, especiall
 
 ## Phase 4 — Usage intelligence
 
-11. Prepare optional hybrid search.
+11. ~~Prepare optional hybrid search.~~ ✅
 12. Create session bootstrap.
 13. Create architectural review mode.
+14. Local embedding generation by default (no external API).
 
 ---
 

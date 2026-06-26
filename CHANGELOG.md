@@ -5,6 +5,76 @@ All notable changes to `mcp-advwiki` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-06-26
+
+### Changed
+
+- **Documentation: search is no longer described as BM25-only.** The README
+  intro, the feature list, the search guidance, and the crate description used
+  to present BM25/Tantivy as the only search backend; they now state that
+  AdvWiki does **hybrid** search — BM25 full-text plus an optional semantic
+  layer (matched by meaning, preferred via RRF fusion when enabled). No behavior
+  change: semantic search remains opt-in via `DD_WIKI_OPENAI_APIKEY` and purely
+  additive.
+- **Roadmap**: item #11 ("optional hybrid search") marked as implemented, and a
+  new item #14 added — generating embeddings **locally by default** (e.g.
+  `fastembed`/ONNX, in-process) so semantic search no longer requires an
+  external API, with the OpenAI-compatible provider kept as an optional
+  alternative.
+
+## [0.2.4] - 2026-06-26
+
+### Changed
+
+- **TLS via rustls**: enabled the `rustls-tls` feature on `reqwest` so the
+  HTTPS client used by the embeddings provider ships a vendored, pure-Rust TLS
+  stack instead of depending on the platform's native TLS / OpenSSL at build
+  time — simpler, more portable static builds.
+
+## [0.2.3] - 2026-06-26
+
+### Added
+
+- **Semantic search (optional, opt-in).** A semantic layer that coexists with
+  the BM25 engine and, when enabled, is **preferred** through hybrid fusion. It
+  turns on only when `DD_WIKI_OPENAI_APIKEY` is set; otherwise everything is a
+  no-op and behavior is byte-for-byte identical to before.
+  - **Embeddings via an OpenAI-compatible API** (`POST /v1/embeddings`, batched)
+    — no local model, no ONNX, no binary bloat (`reqwest` was already a
+    dependency). The same contract covers OpenAI and local servers
+    (Ollama/LM Studio/TEI) by pointing `DD_WIKI_OPENAI_BASEURL` at them.
+    Configured by `DD_WIKI_*` env vars: `DD_WIKI_OPENAI_APIKEY` (gate),
+    `DD_WIKI_OPENAI_BASEURL` (default `https://api.openai.com/v1`),
+    `DD_WIKI_OPENAI_MODEL` (default `text-embedding-3-small`),
+    `DD_WIKI_CHUNK_CHARS` (default `2000`). The embedding dimension is
+    auto-detected from the returned vector.
+  - **Structure-agnostic, boundary-aware chunking** (recursive `\n\n` → `\n` →
+    sentence → word, hard cut only as a last resort), 2000 chars with 20%
+    overlap; only **pages** are embedded — raw sources stay BM25-only.
+  - **On-disk vector store** at `.advwiki/embeddings/{slug}.bin` (f32 LE; magic
+    `ADVE`, format version, dim, model name, MD5 of the page body, per-chunk
+    offsets + vectors). It is rebuildable, so it is git-ignored like the Tantivy
+    `index/`. The body-hash header gates re-embedding: a save that only touches
+    `updated_at` is **not** re-embedded (no wasted API calls).
+  - **Hybrid ranking via RRF**: per-page score is the max cosine over its chunks
+    (max-pool); BM25 and semantic rankings are fused with Reciprocal Rank Fusion
+    (`k=60`, weights semantic `2.0` / BM25 `1.0`). `query_wiki` gains an optional
+    `mode` argument — `auto` (default, hybrid), `bm25` (force lexical), or
+    `semantic` (prefer meaning, falling back to BM25 when unavailable).
+  - **Indexing lifecycle**: only the **primary** instance embeds, through a
+    dedicated `mpsc` worker (concurrency 4) mirroring the git committer. The boot
+    scan and the file watcher enqueue slugs; transient API errors retry with
+    backoff (3 attempts), permanent ones are logged and skipped (the page stays
+    BM25-only). Boot never blocks — AdvWiki serves BM25 immediately and populates
+    embeddings in the background.
+  - **Degradation is additive, never subtractive**: a page with no embedding
+    still appears via BM25; a query that fails to embed falls back to BM25; a
+    `.bin` with a divergent model/dimension is treated as stale and re-embedded.
+  - **`lint_wiki`** now reports a **Semantic search** status line: enabled/disabled,
+    the model in use, and embedding coverage (`N/M pages`).
+  - Testability: an `EmbeddingProvider` trait with a real `OpenAiEmbedder` and a
+    deterministic `FakeEmbedder` keeps the unit/integration tests network-free.
+
 ## [0.2.2] - 2026-06-01
 
 ### Added
