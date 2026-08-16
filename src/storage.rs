@@ -71,7 +71,8 @@ pub struct RawIndexEntry {
 /// Gerente de arquivos da Wiki. Toda operação de I/O passa por esta struct.
 #[derive(Debug, Clone)]
 pub struct WikiFileManager {
-    /// Diretório raiz do projeto (onde `.advwiki/` e `.advwikilog.md` residem).
+    /// Raiz da wiki — o workspace em `~/.advwiki/projects/<slug>/`, onde
+    /// `.advwiki/`, `.advwikilog.md` e `rawindex.md` residem.
     root: PathBuf,
     /// Subdiretório `.advwiki/` — todas as páginas e sources vivem aqui.
     wiki_dir: PathBuf,

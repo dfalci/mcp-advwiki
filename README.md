@@ -67,7 +67,7 @@ mcp-advwiki --help
 
 ### 2. Pick the project root
 
-AdvWiki stores its files under the project root you pass with `--root`.
+`--root` identifies the project. It is **not** where the data is written: each root maps to its own workspace under `~/.advwiki/projects/<slug>/`, so your repository stays clean and the agent never trips over wiki pages while scanning files.
 
 ```bash
 mcp-advwiki --root /path/to/your/project
@@ -312,20 +312,58 @@ Semantic search is **opt-in and purely additive**:
 
 ### How to enable
 
-Set a single environment variable in the AdvWiki process — that is the trigger:
+One environment variable is the trigger — but it must reach **the AdvWiki process itself**. AdvWiki runs as a subprocess of your MCP client, so it does not inherit an `export` you typed in some other shell. Set it where the client launches the server.
+
+**Claude Code** — pass it with `-e` when registering the server:
+
+```bash
+claude mcp add advwiki -e DD_WIKI_OPENAI_APIKEY=sk-... -- mcp-advwiki --root "$(pwd)"
+```
+
+**Claude Desktop** — add an `env` block to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "advwiki": {
+      "type": "stdio",
+      "command": "mcp-advwiki",
+      "args": ["--root", "/path/to/your/project"],
+      "env": {
+        "DD_WIKI_OPENAI_APIKEY": "sk-..."
+      }
+    }
+  }
+}
+```
+
+**Running the binary yourself** — a plain shell export works:
 
 ```bash
 export DD_WIKI_OPENAI_APIKEY=sk-...
+mcp-advwiki --root /path/to/your/project
 ```
 
 Embeddings are produced by an external **OpenAI-compatible** API (`POST /v1/embeddings`). There is no local model and no bundled ONNX runtime. The same contract works with OpenAI and with local servers (Ollama, LM Studio, TEI) — just point the base URL at them:
 
-```bash
-# Example: a local embedding server
-export DD_WIKI_OPENAI_APIKEY=local            # any non-empty value to flip the gate
-export DD_WIKI_OPENAI_BASEURL=http://localhost:11434/v1
-export DD_WIKI_OPENAI_MODEL=nomic-embed-text
+```json
+"env": {
+  "DD_WIKI_OPENAI_APIKEY": "local",
+  "DD_WIKI_OPENAI_BASEURL": "http://localhost:11434/v1",
+  "DD_WIKI_OPENAI_MODEL": "nomic-embed-text"
+}
 ```
+
+The API key is only a gate for local servers that do not authenticate — any non-empty value flips it on.
+
+### Checking that it is on
+
+Two ways, no guessing:
+
+- the server logs `Busca semântica ligada` on stderr at startup, with the model and how many pages already have a cached embedding;
+- `lint_wiki` reports a **Semantic search** status line: enabled or disabled, the model, and coverage as `N/M pages`.
+
+If neither shows it enabled, the variable did not reach the process — that is almost always an `export` that the MCP client never saw.
 
 ### Environment variables
 
@@ -341,11 +379,20 @@ The vector dimension is auto-detected from the API response and recorded with ea
 ### What gets embedded
 
 - **Only curated pages** are embedded. Raw sources (`raw://source/...`) remain BM25-only.
-- Embeddings are cached on disk under `.advwiki/embeddings/{slug}.bin` and are rebuildable, so they are git-ignored (like the Tantivy `index/`). They are gated by a hash of the page body, so a change that only touches `updated_at` does not re-embed.
+- Embeddings are cached in the workspace, under `~/.advwiki/projects/<slug>/.advwiki/embeddings/{slug}.bin` — outside your repository, like the Tantivy `index/`. They are rebuildable: deleting them costs API calls, not data.
+- A page is re-embedded when its `.bin` is missing, when the page body hash changes, or when the **model** no longer matches the one recorded in the cache. So switching `DD_WIKI_OPENAI_MODEL` re-embeds the whole wiki automatically — there is no manual reindex step. A change that only touches `updated_at` does not re-embed.
 
 ### Cost note
 
-The **first activation on an existing wiki embeds every page** through the API, which incurs one batch of embedding calls. After that, only new or changed pages are embedded. Enabling never blocks startup: AdvWiki serves BM25 immediately and populates embeddings in the background.
+The **first activation on an existing wiki embeds every page** through the API, which incurs one batch of embedding calls. After that, only new or changed pages are embedded. Enabling never blocks startup: AdvWiki serves BM25 immediately and populates embeddings in the background, four pages at a time.
+
+### When the API fails
+
+Embedding failures never take the server down and never block a search. A transient error (408, 429, 5xx) is retried up to 3 times with a doubling backoff starting at 500 ms; a permanent one (bad key, unknown model) is not retried at all. Either way the page simply stays BM25-only and the failure is logged. Fix the cause and restart: the page is still stale, so it gets picked up again.
+
+### Turning it off
+
+Remove `DD_WIKI_OPENAI_APIKEY` and restart. Search goes back to pure BM25 and no embedding call is ever made. The cached `.bin` files are left alone, so re-enabling later with the same model costs nothing — nothing needs re-embedding.
 
 ### Controlling and inspecting it
 
@@ -356,10 +403,10 @@ The **first activation on an existing wiki embeds every page** through the API, 
 
 ## Directory layout
 
-AdvWiki creates and manages this structure under the selected root:
+Wiki data lives outside your project, in a workspace of its own:
 
 ```text
-<project-root>/
+~/.advwiki/projects/<slug>/
   .advwiki/
     pages/        # curated Markdown pages
     sources/      # raw source contents
@@ -371,7 +418,15 @@ AdvWiki creates and manages this structure under the selected root:
   rawindex.md     # readable index of raw sources
 ```
 
+`<slug>` is the root path with every non-alphanumeric character replaced by `-`, so `C:\teste` becomes `C--teste` and each project gets its own isolated workspace. Very long paths are truncated and disambiguated with a hash.
+
 The `.advwiki/index/` folder is generated. Do not edit it manually.
+
+### Migrating an existing wiki
+
+Wikis created before this layout — the ones still sitting in `<project>/.advwiki/` — are moved to their workspace automatically on the first run, along with `.advwikilog.md` and `rawindex.md`. The move only removes the originals after the copy has been verified and committed, so an interrupted migration leaves your data untouched and simply retries on the next start. **If the migration cannot complete, the server refuses to start** rather than run against a half-copied wiki.
+
+Once a workspace exists, it wins: a `.advwiki/` that shows up again in the project (a stray backup, a bad checkout) is logged and ignored, never merged.
 
 ---
 
@@ -560,10 +615,10 @@ Use `--autocommit` when you want AdvWiki to version wiki changes automatically.
 mcp-advwiki --root /path/to/project --autocommit
 ```
 
-AdvWiki initializes a separate Git repository inside:
+AdvWiki initializes a separate Git repository inside the project's workspace:
 
 ```text
-/path/to/project/.advwiki/.git/
+~/.advwiki/projects/<slug>/.advwiki/.git/
 ```
 
 This keeps wiki history isolated from the project repository.

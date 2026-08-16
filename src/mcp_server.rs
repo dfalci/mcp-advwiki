@@ -316,15 +316,15 @@ impl AdvWikiMcpServer {
         // Recursos fixos
         resources.push(McpResource {
             uri: "wiki://log".into(),
-            name: "Log Operacional".into(),
-            description: Some("Registro de operações da Wiki".into()),
+            name: "Operational Log".into(),
+            description: Some("Wiki operations log".into()),
             mimeType: Some("text/markdown".into()),
         });
 
         resources.push(McpResource {
             uri: "wiki://index".into(),
-            name: "Índice Principal".into(),
-            description: Some("Índice de raw sources (rawindex.md)".into()),
+            name: "Main Index".into(),
+            description: Some("Raw source index (rawindex.md)".into()),
             mimeType: Some("text/markdown".into()),
         });
 
@@ -335,7 +335,7 @@ impl AdvWikiMcpServer {
                     resources.push(McpResource {
                         uri: format!("wiki://page/{slug}"),
                         name: slug.replace('-', " "),
-                        description: Some(format!("Página da Wiki: {}", slug)),
+                        description: Some(format!("Wiki page: {}", slug)),
                         mimeType: Some("text/markdown".into()),
                     });
                 }
@@ -352,13 +352,13 @@ impl AdvWikiMcpServer {
                     resources.push(McpResource {
                         uri: format!("raw://source/{source_id}"),
                         name: format!("Raw Source: {source_id}"),
-                        description: Some(format!("Conteúdo bruto: {source_id}")),
+                        description: Some(format!("Raw content: {source_id}")),
                         mimeType: Some("text/plain".into()),
                     });
                     resources.push(McpResource {
                         uri: format!("raw://sourcemetadata/{source_id}"),
-                        name: format!("Metadados: {source_id}"),
-                        description: Some(format!("Metadados JSON da source: {source_id}")),
+                        name: format!("Metadata: {source_id}"),
+                        description: Some(format!("Source JSON metadata: {source_id}")),
                         mimeType: Some("application/json".into()),
                     });
                 }
@@ -450,29 +450,29 @@ impl AdvWikiMcpServer {
         let tools = vec![
             McpTool {
                 name: "query_wiki".into(),
-                description: Some("Busca na Wiki. Por padrão é híbrida (BM25 léxico + semântica) quando a busca semântica está ligada; senão, BM25 puro. Retorna as páginas e raw sources relevantes.".into()),
+                description: Some("Search the wiki. Hybrid by default (lexical BM25 + semantic) when semantic search is enabled on the server; otherwise pure BM25. Prefer short queries with exact terms — service names, modules, technologies, tables, queues, endpoints, classes, config keys, error strings. Returns the matching pages and raw sources.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "question": {
                             "type": "string",
-                            "description": "Termos de busca (ex: 'rust memory safety')"
+                            "description": "Search terms (e.g. 'rust memory safety')"
                         },
                         "includeRawReferences": {
                             "type": "boolean",
-                            "description": "Se true, inclui raw sources nos resultados (sempre via BM25)",
+                            "description": "If true, include raw sources in the results (always via BM25). Worth it for audits, source checking and traceability; noise otherwise.",
                             "default": false
                         },
                         "maxPages": {
                             "type": "integer",
-                            "description": "Número máximo de resultados",
+                            "description": "Maximum number of results",
                             "default": 10,
                             "minimum": 1,
                             "maximum": 50
                         },
                         "mode": {
                             "type": "string",
-                            "description": "Estratégia de busca: 'auto' funde BM25 e semântica (recomendado); 'bm25' força só léxico; 'semantic' prioriza significado (cai para BM25 se a semântica estiver indisponível). Sem efeito quando a busca semântica está desligada.",
+                            "description": "Search strategy: 'auto' fuses BM25 and semantic (recommended); 'bm25' forces lexical only; 'semantic' prefers meaning (falls back to BM25 when semantic is unavailable). No effect when semantic search is disabled. Only pages are embedded — raw sources are always BM25.",
                             "enum": ["auto", "bm25", "semantic"],
                             "default": "auto"
                         }
@@ -482,30 +482,30 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "update_page".into(),
-                description: Some("Cria ou atualiza uma página da Wiki. Sem 'section', 'content' é o documento inteiro ('overwrite' substitui tudo, 'append' adiciona ao fim). Com 'section', a operação afeta APENAS aquela seção (heading): 'overwrite' troca o corpo da seção, 'append' adiciona ao fim dela — preferível para editar uma parte sem reenviar a página toda.".into()),
+                description: Some("Create or update a wiki page. Without 'section', 'content' is the whole document ('overwrite' replaces everything, 'append' adds to the end). With 'section', the operation affects ONLY that heading: 'overwrite' replaces its body, 'append' adds to its end — preferred for editing one part without resending the whole page. Body links must use wikilink syntax: [[slug]] or [[slug|Display text]].".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "slug": {
                             "type": "string",
-                            "description": "Identificador único da página (ex: 'getting-started')"
+                            "description": "Unique page identifier (e.g. 'getting-started'). ASCII [a-zA-Z0-9._-] only — no spaces, no accents, no /\\:. Cannot start or end with '.' nor end with a space. Windows reserved names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) are rejected."
                         },
                         "mode": {
                             "type": "string",
-                            "description": "Modo de escrita: 'overwrite' (substitui) ou 'append' (adiciona ao fim). Com 'section', o escopo é a seção, não o documento.",
+                            "description": "Write mode: 'overwrite' (replace) or 'append' (add to the end). With 'section', the scope is the section, not the document.",
                             "enum": ["overwrite", "append"]
                         },
                         "content": {
                             "type": "string",
-                            "description": "Conteúdo em Markdown. Sem 'section', é a página inteira; com 'section', é apenas o corpo da seção."
+                            "description": "Markdown content. Without 'section', the whole page; with 'section', only that section's body. 'created_at'/'updated_at' are written by the server on every save — never set them by hand."
                         },
                         "section": {
                             "type": "string",
-                            "description": "Opcional. Título de uma seção existente (heading, ex: 'Detalhes' ou '## Detalhes'). Se informado, só essa seção é alterada e o resto da página é preservado. A página deve existir. Erro se a seção não existir ou for ambígua."
+                            "description": "Optional. Title of an existing ATX heading (e.g. 'Details' or '## Details'), matched case-insensitively, with or without the '#'. Only that section changes and the rest of the page is rebuilt byte-for-byte; editing '## X' includes its '### Y' subsections. The page must exist, and an unknown or duplicated title errors out without writing — there is no silent fallback."
                         },
                         "rationale": {
                             "type": "string",
-                            "description": "Justificativa da alteração (registrada no log operacional)"
+                            "description": "Reason for the change (recorded in the operational log)"
                         }
                     },
                     "required": ["slug", "mode", "content"]
@@ -513,32 +513,32 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "set_page_metadata".into(),
-                description: Some("Edita o frontmatter de uma página EXISTENTE sem reenviar o corpo. 'set' define campos escalares (ex: type, project, status, confidence, owner); 'add'/'remove' adicionam/removem itens de campos de lista (ex: tags, related, sources) sem duplicar. Campos não mencionados — inclusive os desconhecidos/custom — são preservados. 'created_at'/'updated_at' são gerenciados pelo servidor e não podem ser definidos.".into()),
+                description: Some("Edit an EXISTING page's frontmatter without resending the body. 'set' assigns scalar fields (e.g. type, project, status, confidence, owner); 'add'/'remove' add or drop items of list fields (e.g. tags, related, sources) without duplicating. Fields not mentioned — including unknown/custom ones — are preserved. 'created_at'/'updated_at' are server-managed and cannot be set.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "slug": {
                             "type": "string",
-                            "description": "Slug da página (aceita também a URI wiki://page/{slug})"
+                            "description": "Page slug (also accepts the wiki://page/{slug} URI)"
                         },
                         "set": {
                             "type": "object",
-                            "description": "Campos escalares a definir/substituir, ex: {\"status\": \"active\", \"project\": \"auth\"}",
+                            "description": "Scalar fields to set/replace, e.g. {\"status\": \"active\", \"project\": \"auth\"}",
                             "additionalProperties": { "type": "string" }
                         },
                         "add": {
                             "type": "object",
-                            "description": "Itens a adicionar a campos de lista (sem duplicar), ex: {\"tags\": [\"backend\"], \"related\": [\"outra-pagina\"]}",
+                            "description": "Items to add to list fields (no duplicates), e.g. {\"tags\": [\"backend\"], \"related\": [\"other-page\"]}",
                             "additionalProperties": { "type": "array", "items": { "type": "string" } }
                         },
                         "remove": {
                             "type": "object",
-                            "description": "Itens a remover de campos de lista, ex: {\"tags\": [\"obsoleta\"]}",
+                            "description": "Items to remove from list fields, e.g. {\"tags\": [\"obsolete\"]}",
                             "additionalProperties": { "type": "array", "items": { "type": "string" } }
                         },
                         "rationale": {
                             "type": "string",
-                            "description": "Justificativa da alteração (registrada no log operacional)"
+                            "description": "Reason for the change (recorded in the operational log)"
                         }
                     },
                     "required": ["slug"]
@@ -546,21 +546,21 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "ingest_source".into(),
-                description: Some("Ingere um arquivo externo como raw source na Wiki. Simula o download e salvamento.".into()),
+                description: Some("Ingest an external file as a raw source. The source_id is the MD5 of the URI, so it is stable: re-ingesting the same URI needs force: true.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "sourceUri": {
                             "type": "string",
-                            "description": "URI do arquivo externo a ser ingerido"
+                            "description": "URI of the external file to ingest"
                         },
                         "sourceType": {
                             "type": "string",
-                            "description": "Tipo do conteúdo (ex: 'pdf', 'markdown', 'text')"
+                            "description": "Content type (e.g. 'pdf', 'markdown', 'text')"
                         },
                         "force": {
                             "type": "boolean",
-                            "description": "Se true, sobrescreve source existente com mesmo ID",
+                            "description": "If true, overwrite an existing source with the same ID",
                             "default": false
                         }
                     },
@@ -569,29 +569,29 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "ingest_extracted_content".into(),
-                description: Some("Salva texto extraído diretamente como raw source na Wiki.".into()),
+                description: Some("Store already-extracted text directly as a raw source. This is where logs, stack traces, pasted specs, error output, tool output and long messages belong — keep them out of curated pages and reference them from there. The source_id is the MD5 of the logical URI: re-ingesting the same URI needs force: true.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "logicalUri": {
                             "type": "string",
-                            "description": "URI lógica de destino (ex: 'raw://source/my-doc')"
+                            "description": "Target logical URI (e.g. 'raw://source/my-doc')"
                         },
                         "sourceType": {
                             "type": "string",
-                            "description": "Tipo do conteúdo original (ex: 'pdf', 'markdown')"
+                            "description": "Type of the original content (e.g. 'pdf', 'markdown')"
                         },
                         "title": {
                             "type": "string",
-                            "description": "Título descritivo do conteúdo"
+                            "description": "Descriptive title for the content"
                         },
                         "content": {
                             "type": "string",
-                            "description": "Conteúdo textual extraído"
+                            "description": "Extracted text content"
                         },
                         "force": {
                             "type": "boolean",
-                            "description": "Se true, sobrescreve source existente",
+                            "description": "If true, overwrite an existing source",
                             "default": false
                         }
                     },
@@ -600,13 +600,13 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "lint_wiki".into(),
-                description: Some("Executa validação estrutural da Wiki e retorna um relatório.".into()),
+                description: Some("Run structural validation over the wiki and return a report. It also reports a Semantic search status line: enabled or disabled, the model, and embedding coverage as N/M pages.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "scope": {
                             "type": "string",
-                            "description": "Escopo da validação: 'all' ou 'quick'",
+                            "description": "Validation scope: 'quick' for everyday hygiene; 'all' for a full audit, which additionally reports stale pages, decisions without rationale and near-duplicates.",
                             "enum": ["all", "quick"]
                         }
                     },
@@ -615,13 +615,13 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "read_knowledge_uri".into(),
-                description: Some("Lê o conteúdo de qualquer URI lógica da Wiki (páginas, raw sources, metadados, log, índice).".into()),
+                description: Some("Read the content of any wiki logical URI: wiki://page/{slug}, wiki://log, wiki://index, wiki://rawindex, raw://source/{id}, raw://sourcemetadata/{id}. Note that wiki://list and raw://sources are NOT routed — enumerate with resources/list or the list_pages_by_* tools instead.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "uri": {
                             "type": "string",
-                            "description": "URI lógica a ser lida (ex: wiki://page/home, raw://source/abc, wiki://log)"
+                            "description": "Logical URI to read (e.g. wiki://page/home, raw://source/abc, wiki://log)"
                         }
                     },
                     "required": ["uri"]
@@ -629,17 +629,17 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "delete_page".into(),
-                description: Some("Remove uma página da Wiki pelo slug.".into()),
+                description: Some("Delete a wiki page by slug.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "slug": {
                             "type": "string",
-                            "description": "Slug da página a ser removida"
+                            "description": "Slug of the page to delete"
                         },
                         "rationale": {
                             "type": "string",
-                            "description": "Justificativa da remoção (registrada no log operacional)"
+                            "description": "Reason for the removal (recorded in the operational log)"
                         }
                     },
                     "required": ["slug"]
@@ -647,17 +647,17 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "delete_raw_source".into(),
-                description: Some("Remove uma raw source (conteúdo bruto + metadados) e atualiza o rawindex.".into()),
+                description: Some("Delete a raw source (raw content + metadata) and update the rawindex.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "sourceId": {
                             "type": "string",
-                            "description": "Identificador da raw source a ser removida"
+                            "description": "Identifier of the raw source to delete"
                         },
                         "rationale": {
                             "type": "string",
-                            "description": "Justificativa da remoção (registrada no log operacional)"
+                            "description": "Reason for the removal (recorded in the operational log)"
                         }
                     },
                     "required": ["sourceId"]
@@ -665,13 +665,13 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "list_pages_by_type".into(),
-                description: Some("Lista páginas da Wiki que têm o campo 'type' do frontmatter igual ao valor informado.".into()),
+                description: Some("List wiki pages whose frontmatter 'type' equals the given value.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "pageType": {
                             "type": "string",
-                            "description": "Valor do campo 'type' a filtrar (ex: 'service', 'decision', 'pattern', 'bug', 'runbook')"
+                            "description": "Value of the 'type' field to filter by (e.g. 'service', 'decision', 'pattern', 'bug', 'runbook')"
                         }
                     },
                     "required": ["pageType"]
@@ -679,13 +679,13 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "list_pages_by_project".into(),
-                description: Some("Lista páginas da Wiki que têm o campo 'project' do frontmatter igual ao valor informado.".into()),
+                description: Some("List wiki pages whose frontmatter 'project' equals the given value.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "project": {
                             "type": "string",
-                            "description": "Nome do projeto a filtrar (ex: 'auth-service', 'gateway')"
+                            "description": "Project name to filter by (e.g. 'auth-service', 'gateway')"
                         }
                     },
                     "required": ["project"]
@@ -693,13 +693,13 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "list_pages_by_tag".into(),
-                description: Some("Lista páginas da Wiki que contêm a tag informada no frontmatter.".into()),
+                description: Some("List wiki pages carrying the given tag in their frontmatter.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "tag": {
                             "type": "string",
-                            "description": "Tag a filtrar (ex: 'backend', 'api', 'mcp')"
+                            "description": "Tag to filter by (e.g. 'backend', 'api', 'mcp')"
                         }
                     },
                     "required": ["tag"]
@@ -707,7 +707,7 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "find_pages_without_sources".into(),
-                description: Some("Lista páginas da Wiki sem campo 'sources' no frontmatter (ou com sources vazio) — candidatas a revisão ou linkagem com raw sources.".into()),
+                description: Some("List wiki pages with no 'sources' field in the frontmatter (or an empty one) — candidates for review or for linking to raw sources.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {}
@@ -715,25 +715,25 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "propose_page_update".into(),
-                description: Some("Propõe uma alteração de página sem gravá-la: salva uma proposta revisável e retorna o diff entre o conteúdo atual e o proposto. Use apply_page_update para aplicar. Com 'section', 'content' é apenas o novo corpo daquela seção (o servidor reconstrói o documento) — o diff fica pequeno e focado.".into()),
+                description: Some("Propose a page change without writing it: stores a reviewable proposal and returns the diff between current and proposed content. Show the diff to the user, then apply it with apply_page_update. Prefer this over a direct update_page when the change is substantial or risky. With 'section', 'content' is only that section's new body (the server rebuilds the document), which keeps the diff small and focused.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "slug": {
                             "type": "string",
-                            "description": "Identificador da página alvo (ex: 'getting-started')"
+                            "description": "Identifier of the target page (e.g. 'getting-started')"
                         },
                         "content": {
                             "type": "string",
-                            "description": "Sem 'section': conteúdo Markdown completo proposto para a página. Com 'section': apenas o novo corpo daquela seção."
+                            "description": "Without 'section': the full proposed Markdown for the page. With 'section': only that section's new body."
                         },
                         "section": {
                             "type": "string",
-                            "description": "Opcional. Título de uma seção existente (heading, ex: 'Detalhes'). Se informado, a proposta substitui apenas essa seção e preserva o resto. A página deve existir; erro se a seção não existir ou for ambígua."
+                            "description": "Optional. Title of an existing heading (e.g. 'Details'). The proposal then replaces only that section and preserves the rest. The page must exist; an unknown or ambiguous title errors out."
                         },
                         "reason": {
                             "type": "string",
-                            "description": "Justificativa da alteração (registrada na proposta e no log ao aplicar)"
+                            "description": "Reason for the change (recorded in the proposal and in the log when applied)"
                         }
                     },
                     "required": ["slug", "content", "reason"]
@@ -741,17 +741,17 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "apply_page_update".into(),
-                description: Some("Aplica uma proposta criada por propose_page_update. Revalida que a página não mudou desde a proposta antes de gravar.".into()),
+                description: Some("Apply a proposal created by propose_page_update, normally after the user approves the diff. Re-checks by MD5 that the page has not changed since the proposal and refuses if it has.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "proposalId": {
                             "type": "string",
-                            "description": "ID da proposta retornado por propose_page_update"
+                            "description": "Proposal ID returned by propose_page_update"
                         },
                         "force": {
                             "type": "boolean",
-                            "description": "Se true, aplica mesmo que a página tenha mudado desde a proposta",
+                            "description": "If true, apply even when the page changed since the proposal",
                             "default": false
                         }
                     },
@@ -760,13 +760,13 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "wiki_graph".into(),
-                description: Some("Retorna o grafo de links da Wiki (nós, arestas, hubs, órfãos e links quebrados). As arestas vêm de links wiki://page/ no corpo e do campo 'related' do frontmatter.".into()),
+                description: Some("Return the wiki link graph (nodes, edges, hubs, orphans and broken links). Edges come from body wikilinks — [[slug]], plus the legacy wiki://page/ form still accepted for reading — and from the frontmatter 'related' field.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "format": {
                             "type": "string",
-                            "description": "Formato de saída: 'summary' (resumo + hubs), 'full' (lista de adjacência) ou 'mermaid' (diagrama)",
+                            "description": "Output format: 'summary' (overview + hubs), 'full' (adjacency list) or 'mermaid' (diagram)",
                             "enum": ["summary", "full", "mermaid"],
                             "default": "summary"
                         }
@@ -775,13 +775,13 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "backlinks".into(),
-                description: Some("Lista as páginas que apontam para uma página (backlinks).".into()),
+                description: Some("List the pages that point to a page (backlinks).".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "slug": {
                             "type": "string",
-                            "description": "Slug da página (aceita também a URI wiki://page/{slug})"
+                            "description": "Page slug (also accepts the wiki://page/{slug} URI)"
                         }
                     },
                     "required": ["slug"]
@@ -789,7 +789,7 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "orphans".into(),
-                description: Some("Lista páginas órfãs — nenhuma outra página aponta para elas. Links da página 'index' gerada são ignorados.".into()),
+                description: Some("List orphan pages — no other page points to them. Links from the generated 'index' page are ignored.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {}
@@ -797,13 +797,13 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "related_pages".into(),
-                description: Some("Lista páginas relacionadas a uma página, classificando a relação (bidirecional, declarada em 'related', aponta para, apontado por).".into()),
+                description: Some("List pages related to a page, classifying the relation (bidirectional, declared in 'related', points to, pointed to by).".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "slug": {
                             "type": "string",
-                            "description": "Slug da página (aceita também a URI wiki://page/{slug})"
+                            "description": "Page slug (also accepts the wiki://page/{slug} URI)"
                         }
                     },
                     "required": ["slug"]
@@ -811,24 +811,24 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "link_suggestions".into(),
-                description: Some("Sugere links entre páginas ainda não conectadas, combinando similaridade de conteúdo com mesmo projeto e tags em comum.".into()),
+                description: Some("Suggest links between pages that are not connected yet, combining content similarity with shared project and tags.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "slug": {
                             "type": "string",
-                            "description": "Se informado, sugere apenas links envolvendo esta página. Sem ele, varre toda a Wiki."
+                            "description": "If given, only suggest links involving this page. Without it, scans the whole wiki."
                         },
                         "maxSuggestions": {
                             "type": "integer",
-                            "description": "Número máximo de sugestões",
+                            "description": "Maximum number of suggestions",
                             "default": 10,
                             "minimum": 1,
                             "maximum": 50
                         },
                         "minSimilarity": {
                             "type": "number",
-                            "description": "Score mínimo para uma sugestão aparecer (0.0 a 1.0)",
+                            "description": "Minimum score for a suggestion to show up (0.0 to 1.0)",
                             "default": 0.15
                         }
                     }
@@ -836,20 +836,20 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "find_claims".into(),
-                description: Some("Lista os claims rastreáveis (bloco `## Claims`) das páginas da Wiki, com texto, source, confiança e data de verificação.".into()),
+                description: Some("List the traceable claims (the `## Claims` block) across wiki pages, with text, source, confidence and verification date.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "slug": {
                             "type": "string",
-                            "description": "Se informado, lista apenas os claims desta página. Sem ele, varre toda a Wiki."
+                            "description": "If given, list only this page's claims. Without it, scans the whole wiki."
                         }
                     }
                 }),
             },
             McpTool {
                 name: "find_claims_without_source".into(),
-                description: Some("Lista os claims que não têm o campo 'Source' — afirmações sem origem documentada.".into()),
+                description: Some("List claims missing the 'Source' field — statements with no documented origin.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {}
@@ -857,13 +857,13 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "find_conflicting_claims".into(),
-                description: Some("Heurística: sinaliza pares de claims com vocabulário sobreposto como candidatos a revisão de conflito. Não detecta contradição de fato — apenas aponta pares a revisar.".into()),
+                description: Some("Heuristic: flags pairs of claims with overlapping vocabulary as conflict-review candidates. It does not detect actual contradiction — it only points at pairs worth reviewing.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "minSimilarity": {
                             "type": "number",
-                            "description": "Sobreposição mínima de termos (Jaccard 0.0 a 1.0) para um par aparecer",
+                            "description": "Minimum term overlap (Jaccard, 0.0 to 1.0) for a pair to show up",
                             "default": 0.25
                         }
                     }
@@ -871,22 +871,22 @@ impl AdvWikiMcpServer {
             },
             McpTool {
                 name: "verify_claim".into(),
-                description: Some("Atualiza a data de 'Last verified' de um claim, marcando-o como verificado.".into()),
+                description: Some("Update a claim's 'Last verified' date, marking it as verified.".into()),
                 inputSchema: json!({
                     "type": "object",
                     "properties": {
                         "slug": {
                             "type": "string",
-                            "description": "Slug da página (aceita também a URI wiki://page/{slug})"
+                            "description": "Page slug (also accepts the wiki://page/{slug} URI)"
                         },
                         "claimIndex": {
                             "type": "integer",
-                            "description": "Índice 1-based do claim dentro do bloco `## Claims` (use find_claims para vê-los)",
+                            "description": "1-based index of the claim within the `## Claims` block (use find_claims to see them)",
                             "minimum": 1
                         },
                         "date": {
                             "type": "string",
-                            "description": "Data da verificação (YYYY-MM-DD). Default: hoje."
+                            "description": "Verification date (YYYY-MM-DD). Default: today."
                         }
                     },
                     "required": ["slug", "claimIndex"]

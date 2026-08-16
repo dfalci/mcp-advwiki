@@ -14,6 +14,7 @@ mod sections;
 mod storage;
 mod vector_store;
 mod watcher;
+mod workspace;
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -71,18 +72,27 @@ Uso:
   mcp-advwiki --skill [--root PATH]  install the AdvWiki skill into the project
   mcp-advwiki -h, --help             show this help message
 
+Storage:
+  Wiki data never lives inside your project. Each origin path maps to its
+  own workspace under `~/.advwiki/projects/<slug>/`, holding the usual
+  `.advwiki/`, `.advwikilog.md` and `rawindex.md`. The slug is the origin
+  path with every non-alphanumeric char replaced by `-`
+  (`C:\teste` -> `C--teste`).
+  A legacy wiki still sitting in the project is moved to its workspace on
+  the first run; if the move cannot complete, startup fails on purpose,
+  leaving the original data untouched.
+
 Opcoes:
-  -r, --root <PATH>  basedir from where the files
-                     `.advwiki/`, `.advwikilog.md` e `rawindex.md`
-                     will be read/created.
+  -r, --root <PATH>  origin path that identifies the workspace.
                      defaults execution dir.
       --skill        write the bundled skill to
                      `<root>/.claude/skills/advwiki-memory/skill.md`
                      (creating parent dirs if needed) and exit.
+                     unlike the wiki data, the skill stays in the project.
       --autocommit   version the wiki content in a git repo rooted at
-                     `<root>/.advwiki/` (git init on first run, with a
-                     pre-set .gitignore). Auto-commits each batch of
-                     changes and pushes (best-effort) to the current
+                     the workspace's `.advwiki/` (git init on first run,
+                     with a pre-set .gitignore). Auto-commits each batch
+                     of changes and pushes (best-effort) to the current
                      branch's upstream, if any.
   -h, --help         show this help message
 
@@ -95,15 +105,25 @@ Environment (semantic search, optional, opt-in):
   DD_WIKI_OPENAI_MODEL    embedding model. default text-embedding-3-small
   DD_WIKI_CHUNK_CHARS     page chunk size in chars. default 2000
 
+  These must reach THIS process. Under an MCP client, that means the
+  client's own env config (see below), not an export in your shell.
+  Check it worked with lint_wiki: it reports a Semantic search line
+  with the model and coverage as N/M pages.
+
 Claude Desktop configuration (claude_desktop_config.json):
   {
     "mcpServers": {
       "advwiki": {
         "command": "mcp-advwiki",
-        "args": ["--root", "/path/to/wiki/root"]
+        "args": ["--root", "/path/to/your/project"],
+        "env": { "DD_WIKI_OPENAI_APIKEY": "sk-..." }
       }
     }
   }
+
+Claude Code:
+  claude mcp add advwiki -e DD_WIKI_OPENAI_APIKEY=sk-... \
+    -- mcp-advwiki --root "$(pwd)"
 "#
 );
 
@@ -245,8 +265,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     tracing::info!("Iniciando o Servidor MCP AdvWiki...");
 
+    // A wiki vive em `~/.advwiki/projects/<slug>/`, derivado do caminho de
+    // origem. Uma wiki legada (ainda dentro do projeto) é migrada aqui, antes de
+    // qualquer I/O; falhar é proposital — subir com wiki incompleta seria pior.
+    let workspace = workspace::resolve(cli.root)?;
+
     //inicializa o gerenciador de arquivos
-    let wiki = Arc::new(storage::WikiFileManager::new(cli.root));
+    let wiki = Arc::new(storage::WikiFileManager::new(Some(workspace)));
     wiki.init().await?;
     tracing::info!(
         root = %wiki.root().display(),

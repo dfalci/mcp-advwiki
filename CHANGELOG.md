@@ -5,6 +5,69 @@ All notable changes to `mcp-advwiki` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-16
+
+Minor bump rather than a patch: where wiki data lives on disk changes, and
+existing wikis are relocated automatically on the first run.
+
+### Changed
+
+- **Wiki data no longer lives inside the project.** Each origin path (the
+  `--root`, or the current directory) now maps to its own workspace under
+  `~/.advwiki/projects/<slug>/`, which holds the same structure as before
+  (`.advwiki/`, `.advwikilog.md`, `rawindex.md`). `--root` becomes the
+  *identity* of the workspace rather than its location. The slug is the origin
+  path with every non-alphanumeric character replaced by `-` (`C:\teste` →
+  `C--teste`), truncated with a hash suffix when the path is very long. This
+  keeps repositories clean and stops agents from accidentally reading wiki
+  pages while scanning project files.
+- `--skill` is unaffected: the bundled skill still goes to
+  `<root>/.claude/skills/advwiki-memory/skill.md`, since it belongs to the
+  project.
+- **MCP tool and resource descriptions are now in English**, matching the rest
+  of the protocol surface, and absorbed the operational details that used to be
+  duplicated in the skill: slug character rules and Windows reserved names, the
+  server-managed `created_at`/`updated_at`, `section` semantics (ATX heading
+  matched case-insensitively, subsections included, no silent fallback on an
+  unknown or duplicated title), the `wiki://list` / `raw://sources` routing
+  caveat, `lint_wiki` scope semantics, and the stable MD5 `source_id`. Keeping
+  them next to the tools means they can no longer drift out of sync with it.
+- **The `advwiki-memory` skill lost ~47% of its size** (431 → 253 lines,
+  15.8 KB → 8.4 KB) with no rule dropped. Removed the tool catalogue that
+  restated the MCP tool descriptions, the "Common mistakes" section that was the
+  negative restatement of rules already given, the inert closing rule, and the
+  duplicate explanations of section editing, semantic search and wikilinks. The
+  frontmatter `description` — the part that stays in context permanently, since
+  it is what the model routes on — went from 916 to 470 characters. What is left
+  is judgment the tool descriptions cannot carry: when to search and when not
+  to, what deserves a page, slug conventions, page template, and claim syntax.
+
+- **Semantic search documentation now covers how to actually turn it on.** The
+  README only showed a shell `export`, which never reaches AdvWiki when it runs
+  as a subprocess of an MCP client — the most common way it is used. It now
+  documents the three real cases (Claude Code `-e`, a `claude_desktop_config.json`
+  `env` block, and a plain shell run), how to confirm it is on (the startup log
+  line and the `lint_wiki` status line), what happens when the embeddings API
+  fails (3 retries with doubling backoff on transient errors, none on permanent
+  ones, page stays BM25-only), how to turn it back off without losing the cache,
+  and that switching `DD_WIKI_OPENAI_MODEL` re-embeds the wiki automatically.
+  `--help` carries the same `env` examples. Also corrected the embeddings cache
+  path, which now lives in the workspace rather than in the project repository.
+
+### Added
+
+- **Automatic one-time migration of legacy wikis.** A wiki still sitting in
+  `<project>/.advwiki/` is moved to its workspace on the first run, along with
+  `.advwikilog.md` and `rawindex.md`. The move copies into a staging directory,
+  verifies file count and byte totals, promotes it with an atomic rename, and
+  only then deletes the originals — an interrupted migration therefore leaves
+  the source intact and simply retries on the next start. Any failure before
+  the promotion aborts startup on purpose, rather than serving a half-copied
+  wiki; a failure to delete the originals afterwards is only a warning, since
+  the data is already safe.
+- Once a workspace exists it takes precedence: a `.advwiki/` reappearing in the
+  project is logged and ignored, never merged.
+
 ## [0.2.5] - 2026-06-26
 
 ### Changed
